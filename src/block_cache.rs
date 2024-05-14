@@ -708,7 +708,7 @@ impl MetadataCache {
     // Do not call this with the top level cache lock held
     fn wait_on_entry_(&self, entry: &CacheEntry) {
         let inner = entry.inner.lock().unwrap();
-        let _ = entry.cond.wait(inner);
+        let _guard = entry.cond.wait(inner).unwrap();
     }
 }
 

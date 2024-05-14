@@ -1,6 +1,8 @@
 use rand::prelude::*;
 use rand_chacha::ChaCha20Rng;
+
 use std::collections::BTreeSet;
+use std::sync::{Arc, Mutex};
 
 //-------------------------------------------------------------------------
 
@@ -19,14 +21,14 @@ impl Default for ScopeRegister {
     }
 }
 
-pub struct ScopeProxy<'a> {
-    register: &'a mut ScopeRegister,
+pub struct ScopeProxy {
+    register: Arc<Mutex<ScopeRegister>>,
     pub id: u32,
 }
 
-impl<'a> Drop for ScopeProxy<'a> {
+impl Drop for ScopeProxy {
     fn drop(&mut self) {
-        self.register.drop_scope(self.id);
+        self.register.lock().unwrap().drop_scope(self.id);
     }
 }
 
@@ -42,14 +44,18 @@ impl ScopeRegister {
         panic!("something wrong in scope register");
     }
 
-    pub fn new_scope(&mut self) -> ScopeProxy {
-        let id = self.find_unused_id();
-        self.active_scopes.insert(id);
-        ScopeProxy { register: self, id }
-    }
-
     fn drop_scope(&mut self, id: u32) {
         self.active_scopes.remove(&id);
+    }
+}
+
+pub fn new_scope(register: Arc<Mutex<ScopeRegister>>) -> ScopeProxy {
+    let mut reg = register.lock().unwrap();
+    let id = reg.find_unused_id();
+    reg.active_scopes.insert(id);
+    ScopeProxy {
+        register: register.clone(),
+        id,
     }
 }
 

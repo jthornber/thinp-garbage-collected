@@ -11,6 +11,7 @@ use crate::btree::remove;
 use crate::btree::spine::*;
 use crate::byte_types::*;
 use crate::packed_array::*;
+use crate::scope_id;
 use crate::transaction_manager::*;
 
 //-------------------------------------------------------------------------
@@ -370,7 +371,6 @@ impl<V: Serializable> BTree<V> {
         todo!();
     }
 
-    /// Returns any values removed
     pub fn remove_range<LeafV, SplitLowFn, SplitHighFn>(
         &mut self,
         key_low: u32,
@@ -383,17 +383,20 @@ impl<V: Serializable> BTree<V> {
         SplitLowFn: FnOnce(u32, &LeafV) -> (u32, LeafV),
         SplitHighFn: FnOnce(u32, &LeafV) -> (u32, LeafV),
     {
-        let mut l_spine = self.mk_spine()?;
-
-        let scopes = self.tm.scopes();
-        let mut scopes = scopes.lock().unwrap();
-        let scope = scopes.new_scope();
-        let context = ReferenceContext::Scoped(scope.id);
-        let mut r_spine = Spine::new(self.tm.clone(), context, self.root)?;
-
+        let l_scope = scope_id::new_scope(self.tm.scopes());
+        let l_context = ReferenceContext::Scoped(l_scope.id);
+        let mut l_spine = Spine::new(self.tm.clone(), l_context, self.root)?;
         remove::remove_geq(&mut l_spine, key_low, split_low_fn)?;
+
+        let r_scope = scope_id::new_scope(self.tm.scopes());
+        let r_context = ReferenceContext::Scoped(r_scope.id);
+        let mut r_spine = Spine::new(self.tm.clone(), r_context, self.root)?;
         remove::remove_lt(&mut r_spine, key_high, split_high_fn)?;
-        remove::merge::<LeafV>(&mut l_spine, &mut r_spine)
+
+        remove::merge::<LeafV>(&mut l_spine, &mut r_spine)?;
+        self.root = l_spine.get_root();
+
+        Ok(())
     }
 
     //-------------------------------
@@ -965,9 +968,7 @@ mod test {
 
         for i in 0..nr_loops {
             eprintln!("loop {}", i);
-            let scopes = fix.tm.scopes();
-            let mut scopes = scopes.lock().unwrap();
-            let scope = scopes.new_scope();
+            let scope = scope_id::new_scope(fix.tm.scopes());
             let mut fix = fix.clone(ReferenceContext::Scoped(scope.id));
             let cut = rand::thread_rng().gen_range(0..nr_entries);
             remove_geq_and_verify(&mut fix, cut)?;
@@ -986,9 +987,7 @@ mod test {
 
         for i in 0..nr_loops {
             eprintln!("loop {}", i);
-            let scopes = fix.tm.scopes();
-            let mut scopes = scopes.lock().unwrap();
-            let scope = scopes.new_scope();
+            let scope = scope_id::new_scope(fix.tm.scopes());
             let mut fix = fix.clone(ReferenceContext::Scoped(scope.id));
             let cut = rand::thread_rng().gen_range(0..nr_entries);
             remove_lt_and_verify(&mut fix, nr_entries, cut)?;
@@ -1048,6 +1047,115 @@ mod test {
 
         ensure!(fix.tree.check()? == 1);
         ensure!(fix.tree.lookup(150)?.unwrap() == Value { v: 200, len: 50 });
+
+        Ok(())
+    }
+
+    #[test]
+    fn remove_range_small() -> Result<()> {
+        let mut fix = Fixture::new(1024, 102400)?;
+        let range_begin = 150;
+        let range_end = 175;
+
+        let split_low = |k: u32, v: &Value| {
+            if k + v.len > range_begin {
+                (
+                    k,
+                    Value {
+                        v: v.v,
+                        len: range_begin - k,
+                    },
+                )
+            } else {
+                (k, *v)
+            }
+        };
+
+        let split_high = |k: u32, v: &Value| {
+            if k < range_end && k + v.len >= range_end {
+                (
+                    range_end,
+                    Value {
+                        v: v.v,
+                        len: (k + v.len) - range_end,
+                    },
+                )
+            } else {
+                (k, *v)
+            }
+        };
+
+        fix.insert(100, &Value { v: 200, len: 100 })?;
+        fix.tree
+            .remove_range(range_begin, range_end, split_low, split_high)?;
+
+        ensure!(fix.tree.check()? == 2);
+        ensure!(fix.tree.lookup(100)?.unwrap() == Value { v: 200, len: 50 });
+        ensure!(fix.tree.lookup(175)?.unwrap() == Value { v: 200, len: 25 });
+
+        Ok(())
+    }
+
+    #[test]
+    fn remove_range_large() -> Result<()> {
+        let mut fix = Fixture::new(1024, 102400)?;
+        let nr_entries = 500;
+
+        for i in 0..nr_entries {
+            fix.insert(i * 10, &Value { v: i * 3, len: 10 })?;
+        }
+        fix.commit()?;
+
+        let range_begin = 1001;
+        let range_end = 2005;
+
+        let split_low = |k: u32, v: &Value| {
+            if k + v.len > range_begin {
+                (
+                    k,
+                    Value {
+                        v: v.v,
+                        len: range_begin - k,
+                    },
+                )
+            } else {
+                (k, *v)
+            }
+        };
+
+        let split_high = |k: u32, v: &Value| {
+            if k < range_end && k + v.len >= range_end {
+                (
+                    range_end,
+                    Value {
+                        v: v.v,
+                        len: (k + v.len) - range_end,
+                    },
+                )
+            } else {
+                (k, *v)
+            }
+        };
+
+        fix.tree
+            .remove_range(range_begin, range_end, split_low, split_high)?;
+        // fix.tree.remove_lt(range_end, split_high)?;
+
+        let mut c = fix.tree.cursor(0)?;
+        loop {
+            let (k, v) = c.get()?.unwrap();
+            eprintln!("{}: {:?}", k, v);
+
+            if !c.next_entry()? {
+                break;
+            }
+        }
+
+        /*
+        ensure!(fix.tree.check()? == 2);
+        ensure!(fix.tree.lookup(100)?.unwrap() == Value { v: 200, len: 50 });
+        ensure!(fix.tree.lookup(175)?.unwrap() == Value { v: 200, len: 25 });
+        */
 
         Ok(())
     }

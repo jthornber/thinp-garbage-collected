@@ -732,7 +732,12 @@ pub fn merge<LeafV>(l_spine: &mut Spine, r_spine: &mut Spine) -> Result<()>
 where
     LeafV: Serializable,
 {
-    let len_delta = l_spine.len() - r_spine.len();
+    // FIXME: relocking all these is inefficient.
+    right_most_spine(l_spine)?;
+    left_most_spine(r_spine)?;
+
+    let len_delta = l_spine.len() as isize - r_spine.len() as isize;
+    eprintln!("len_delta = {}", len_delta);
     if len_delta > 0 {
         // left spine will become the result
 

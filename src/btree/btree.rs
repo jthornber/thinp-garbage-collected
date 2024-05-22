@@ -7,9 +7,10 @@ use crate::block_cache::*;
 use crate::block_kinds::*;
 use crate::btree::insert;
 use crate::btree::node::*;
+use crate::btree::node_alloc::*;
+use crate::btree::remove;
 use crate::byte_types::*;
 use crate::packed_array::*;
-use crate::scope_id;
 use crate::transaction_manager::*;
 
 //-------------------------------------------------------------------------
@@ -308,8 +309,8 @@ impl<V: Serializable> BTree<V> {
         }
     }
 
-    fn mk_alloc(&self) -> insert::AllocContext {
-        insert::AllocContext::new(self.tm.clone(), self.context)
+    fn mk_alloc(&self) -> AllocContext {
+        AllocContext::new(self.tm.clone(), self.context)
     }
 
     pub fn insert(&mut self, key: u32, value: &V) -> Result<()> {
@@ -320,7 +321,7 @@ impl<V: Serializable> BTree<V> {
 
     pub fn remove(&mut self, key: u32) -> Result<Option<V>> {
         let mut alloc = self.mk_alloc();
-        if let Some((root, v)) = insert::remove(&mut alloc, self.root, key)? {
+        if let Some((root, v)) = remove::remove(&mut alloc, self.root, key)? {
             self.root = root;
             Ok(Some(v))
         } else {
@@ -481,6 +482,7 @@ mod test {
     use super::*;
     use crate::block_allocator::*;
     use crate::core::*;
+    use crate::scope_id;
     use anyhow::{ensure, Result};
     use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
     use rand::seq::SliceRandom;

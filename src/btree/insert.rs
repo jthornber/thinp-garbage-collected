@@ -1,42 +1,12 @@
 use anyhow::Result;
-use std::sync::Arc;
 
 use crate::block_cache::*;
-use crate::block_kinds::*;
 use crate::btree::node::*;
+use crate::btree::node_alloc::*;
 use crate::byte_types::*;
 use crate::packed_array::*;
-use crate::transaction_manager::*;
 
 //-------------------------------------------------------------------------
-
-pub struct AllocContext {
-    tm: Arc<TransactionManager>,
-    context: ReferenceContext,
-}
-
-impl AllocContext {
-    pub fn new(tm: Arc<TransactionManager>, context: ReferenceContext) -> Self {
-        Self { tm, context }
-    }
-
-    fn new_block(&mut self) -> Result<WriteProxy> {
-        self.tm.new_block(self.context, &BNODE_KIND)
-    }
-
-    fn is_internal(&mut self, loc: MetadataBlock) -> Result<bool> {
-        let b = self.tm.read(loc, &BNODE_KIND)?;
-        Ok(read_flags(b.r())? == BTreeFlags::Internal)
-    }
-
-    fn shadow<NV: Serializable>(&mut self, loc: MetadataBlock) -> Result<WNode<NV>> {
-        Ok(w_node(self.tm.shadow(self.context, loc, &BNODE_KIND)?))
-    }
-
-    fn read<NV: Serializable>(&mut self, loc: MetadataBlock) -> Result<RNode<NV>> {
-        Ok(r_node(self.tm.read(loc, &BNODE_KIND)?))
-    }
-}
 
 fn has_space_for_insert<NV: Serializable, Data: Readable>(node: &Node<NV, Data>) -> bool {
     node.nr_entries.get() < Node::<NV, Data>::max_entries() as u32
@@ -228,82 +198,3 @@ pub fn insert<V: Serializable>(
 }
 
 //-------------------------------------------------
-
-enum RemoveResult<V> {
-    NotFound,
-
-    // We still return the empty metadata block in case this is the root
-    RemoveChild(MetadataBlock, V),
-    ReplaceChild(MetadataBlock, V),
-}
-
-// Returns Some((new_root, old_value)) if key is present, otherwise None.
-fn remove_<V: Serializable>(
-    alloc: &mut AllocContext,
-    loc: MetadataBlock,
-    key: u32,
-) -> Result<RemoveResult<V>> {
-    use RemoveResult::*;
-
-    if alloc.is_internal(loc)? {
-        let mut node = alloc.shadow::<MetadataBlock>(loc)?;
-        let mut idx = node.keys.bsearch(&key);
-        if idx < 0 {
-            return Ok(NotFound);
-        }
-
-        if idx as u32 == node.nr_entries.get() {
-            idx -= 1;
-        }
-
-        let idx = idx as usize;
-
-        let child = node.values.get(idx);
-        match remove_::<V>(alloc, child, key)? {
-            NotFound => Ok(NotFound),
-            RemoveChild(_, v) => {
-                node.remove_at(idx);
-                if node.is_empty() {
-                    Ok(RemoveChild(node.loc, v))
-                } else {
-                    Ok(ReplaceChild(node.loc, v))
-                }
-            }
-            ReplaceChild(new, v) => {
-                node.values.set(idx, &new);
-                Ok(ReplaceChild(node.loc, v))
-            }
-        }
-    } else {
-        let mut node = alloc.shadow::<V>(loc)?;
-        let idx = node.keys.bsearch(&key);
-        if idx < 0 || idx as u32 > node.nr_entries.get() {
-            Ok(NotFound)
-        } else {
-            let idx = idx as usize;
-            let v = node.values.get(idx);
-            node.remove_at(idx);
-            if node.is_empty() {
-                Ok(RemoveChild(node.loc, v))
-            } else {
-                Ok(ReplaceChild(node.loc, v))
-            }
-        }
-    }
-}
-
-pub fn remove<V: Serializable>(
-    alloc: &mut AllocContext,
-    root: MetadataBlock,
-    key: u32,
-) -> Result<Option<(MetadataBlock, V)>> {
-    use RemoveResult::*;
-
-    match remove_::<V>(alloc, root, key)? {
-        NotFound => Ok(None),
-        RemoveChild(new_root, v) => Ok(Some((new_root, v))),
-        ReplaceChild(new_root, v) => Ok(Some((new_root, v))),
-    }
-}
-
-//-------------------------------------------------------------------------

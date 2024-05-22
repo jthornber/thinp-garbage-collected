@@ -309,8 +309,8 @@ impl<V: Serializable> BTree<V> {
         }
     }
 
-    fn mk_alloc(&self) -> AllocContext {
-        AllocContext::new(self.tm.clone(), self.context)
+    fn mk_alloc(&self) -> NodeAlloc {
+        NodeAlloc::new(self.tm.clone(), self.context)
     }
 
     pub fn insert(&mut self, key: u32, value: &V) -> Result<()> {

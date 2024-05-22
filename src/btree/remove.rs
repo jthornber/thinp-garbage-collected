@@ -16,7 +16,7 @@ enum RemoveResult<V> {
 
 // Returns Some((new_root, old_value)) if key is present, otherwise None.
 fn remove_<V: Serializable>(
-    alloc: &mut AllocContext,
+    alloc: &mut NodeAlloc,
     loc: MetadataBlock,
     key: u32,
 ) -> Result<RemoveResult<V>> {
@@ -70,7 +70,7 @@ fn remove_<V: Serializable>(
 }
 
 pub fn remove<V: Serializable>(
-    alloc: &mut AllocContext,
+    alloc: &mut NodeAlloc,
     root: MetadataBlock,
     key: u32,
 ) -> Result<Option<(MetadataBlock, V)>> {

@@ -10,12 +10,12 @@ use crate::transaction_manager::*;
 
 //-------------------------------------------------------------------------
 
-pub struct AllocContext {
+pub struct NodeAlloc {
     tm: Arc<TransactionManager>,
     context: ReferenceContext,
 }
 
-impl AllocContext {
+impl NodeAlloc {
     pub fn new(tm: Arc<TransactionManager>, context: ReferenceContext) -> Self {
         Self { tm, context }
     }

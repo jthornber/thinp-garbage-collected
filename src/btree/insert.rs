@@ -12,7 +12,7 @@ fn has_space_for_insert<NV: Serializable, Data: Readable>(node: &Node<NV, Data>)
     node.nr_entries.get() < Node::<NV, Data>::max_entries() as u32
 }
 
-fn min_key(alloc: &mut AllocContext, loc: MetadataBlock) -> Result<u32> {
+fn min_key(alloc: &mut NodeAlloc, loc: MetadataBlock) -> Result<u32> {
     // It's safe to alway assume this is an internal node, since we only access
     // the keys.
     let node = alloc.read::<MetadataBlock>(loc)?;
@@ -43,7 +43,7 @@ fn redistribute2<NV: Serializable>(left: &mut WNode<NV>, right: &mut WNode<NV>) 
 }
 
 fn split_into_two<NV: Serializable>(
-    alloc: &mut AllocContext,
+    alloc: &mut NodeAlloc,
     mut left: WNode<NV>,
 ) -> Result<(WNode<NV>, WNode<NV>)> {
     let right_block = alloc.new_block()?;
@@ -59,7 +59,7 @@ enum InsertResult {
 }
 
 fn ensure_space<NV: Serializable, M: FnOnce(&mut WNode<NV>, usize)>(
-    alloc: &mut AllocContext,
+    alloc: &mut NodeAlloc,
     mut node: WNode<NV>,
     idx: usize,
     mutator: M,
@@ -81,7 +81,7 @@ fn ensure_space<NV: Serializable, M: FnOnce(&mut WNode<NV>, usize)>(
 }
 
 fn insert_into_internal<V: Serializable>(
-    alloc: &mut AllocContext,
+    alloc: &mut NodeAlloc,
     loc: MetadataBlock,
     key: u32,
     value: &V,
@@ -126,7 +126,7 @@ fn insert_into_internal<V: Serializable>(
 }
 
 fn insert_into_leaf<V: Serializable>(
-    alloc: &mut AllocContext,
+    alloc: &mut NodeAlloc,
     block: MetadataBlock,
     key: u32,
     value: &V,
@@ -158,7 +158,7 @@ fn insert_into_leaf<V: Serializable>(
 }
 
 fn insert_recursive<V: Serializable>(
-    alloc: &mut AllocContext,
+    alloc: &mut NodeAlloc,
     block: MetadataBlock,
     key: u32,
     value: &V,
@@ -172,7 +172,7 @@ fn insert_recursive<V: Serializable>(
 
 // Returns the new root
 pub fn insert<V: Serializable>(
-    alloc: &mut AllocContext,
+    alloc: &mut NodeAlloc,
     root: MetadataBlock,
     key: u32,
     value: &V,

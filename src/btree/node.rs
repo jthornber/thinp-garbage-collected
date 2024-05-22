@@ -122,12 +122,10 @@ impl<V: Serializable, Data: Readable> Node<V, Data> {
             .and_then(|k| self.values.last().map(|v| (k, v)))
     }
 
-    #[allow(dead_code)]
     pub fn nr_entries(&self) -> usize {
         self.nr_entries.get() as usize
     }
 
-    #[allow(dead_code)]
     pub fn is_empty(&self) -> bool {
         self.nr_entries() == 0
     }
@@ -154,16 +152,28 @@ impl<V: Serializable, Data: Writeable> Node<V, Data> {
         (keys, values)
     }
 
-    pub fn prepend(&mut self, keys: &[u32], values: &[V]) {
+    pub fn prepend(&mut self, key: u32, value: &V) {
+        self.keys.prepend(&key);
+        self.values.prepend(value);
+        self.nr_entries.inc(1);
+    }
+
+    pub fn prepend_many(&mut self, keys: &[u32], values: &[V]) {
         assert!(keys.len() == values.len());
-        self.keys.prepend(keys);
-        self.values.prepend(values);
+        self.keys.prepend_many(keys);
+        self.values.prepend_many(values);
         self.nr_entries.inc(keys.len() as u32);
     }
 
-    pub fn append(&mut self, keys: &[u32], values: &[V]) {
-        self.keys.append(keys);
-        self.values.append(values);
+    pub fn append(&mut self, key: u32, value: &V) {
+        self.keys.append(&key);
+        self.values.append(value);
+        self.nr_entries.inc(1);
+    }
+
+    pub fn append_many(&mut self, keys: &[u32], values: &[V]) {
+        self.keys.append_many(keys);
+        self.values.append_many(values);
         self.nr_entries.inc(keys.len() as u32);
     }
 

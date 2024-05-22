@@ -2,7 +2,6 @@ use anyhow::{anyhow, ensure, Result};
 
 use crate::block_cache::*;
 use crate::btree::node::*;
-use crate::btree::spine::*;
 use crate::byte_types::*;
 use crate::packed_array::*;
 

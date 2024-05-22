@@ -7,8 +7,6 @@ use crate::block_cache::*;
 use crate::block_kinds::*;
 use crate::btree::insert;
 use crate::btree::node::*;
-use crate::btree::remove;
-use crate::btree::spine::*;
 use crate::byte_types::*;
 use crate::packed_array::*;
 use crate::scope_id;
@@ -310,32 +308,24 @@ impl<V: Serializable> BTree<V> {
         }
     }
 
-    fn mk_spine(&self) -> Result<Spine> {
-        Spine::new(self.tm.clone(), self.context, self.root)
-    }
-
-    /// Optimisation for a paired remove/insert.  Avoids having to ensure space
-    /// or rebalance.  Fails if the old_key is not present, or if the new_key doesn't
-    /// fit in the old one's location.
-    pub fn overwrite(&mut self, old_key: u32, new_key: u32, value: &V) -> Result<()> {
-        let mut spine = self.mk_spine()?;
-        insert::overwrite(&mut spine, old_key, new_key, value)?;
-        self.root = spine.get_root();
-        Ok(())
+    fn mk_alloc(&self) -> insert::AllocContext {
+        insert::AllocContext::new(self.tm.clone(), self.context)
     }
 
     pub fn insert(&mut self, key: u32, value: &V) -> Result<()> {
-        let mut spine = self.mk_spine()?;
-        insert::insert(&mut spine, key, value)?;
-        self.root = spine.get_root();
+        let mut alloc = self.mk_alloc();
+        self.root = insert::insert(&mut alloc, self.root, key, value)?;
         Ok(())
     }
 
     pub fn remove(&mut self, key: u32) -> Result<Option<V>> {
-        let mut spine = self.mk_spine()?;
-        let r = remove::remove(&mut spine, key)?;
-        self.root = spine.get_root();
-        Ok(r)
+        let mut alloc = self.mk_alloc();
+        if let Some((root, v)) = insert::remove(&mut alloc, self.root, key)? {
+            self.root = root;
+            Ok(Some(v))
+        } else {
+            Ok(None)
+        }
     }
 
     pub fn remove_geq<SplitFn: FnOnce(u32, &V) -> (u32, V)>(
@@ -343,10 +333,13 @@ impl<V: Serializable> BTree<V> {
         key: u32,
         split_fn: SplitFn,
     ) -> Result<()> {
-        let mut spine = self.mk_spine()?;
-        remove::remove_geq(&mut spine, key, split_fn)?;
-        self.root = spine.get_root();
-        Ok(())
+        todo!();
+        /*
+                let mut spine = self.mk_spine()?;
+                remove::remove_geq(&mut spine, key, split_fn)?;
+                self.root = spine.get_root();
+                Ok(())
+        */
     }
 
     pub fn remove_lt<SplitFn: FnOnce(u32, &V) -> (u32, V)>(
@@ -354,10 +347,14 @@ impl<V: Serializable> BTree<V> {
         key: u32,
         split_fn: SplitFn,
     ) -> Result<()> {
-        let mut spine = self.mk_spine()?;
-        remove::remove_lt(&mut spine, key, split_fn)?;
-        self.root = spine.get_root();
-        Ok(())
+        todo!();
+
+        /*
+                let mut spine = self.mk_spine()?;
+                remove::remove_lt(&mut spine, key, split_fn)?;
+                self.root = spine.get_root();
+                Ok(())
+        */
     }
 
     //-------------------------------
@@ -383,20 +380,23 @@ impl<V: Serializable> BTree<V> {
         SplitLowFn: FnOnce(u32, &LeafV) -> (u32, LeafV),
         SplitHighFn: FnOnce(u32, &LeafV) -> (u32, LeafV),
     {
-        let l_scope = scope_id::new_scope(self.tm.scopes());
-        let l_context = ReferenceContext::Scoped(l_scope.id);
-        let mut l_spine = Spine::new(self.tm.clone(), l_context, self.root)?;
-        remove::remove_geq(&mut l_spine, key_low, split_low_fn)?;
+        todo!();
+        /*
+                let l_scope = scope_id::new_scope(self.tm.scopes());
+                let l_context = ReferenceContext::Scoped(l_scope.id);
+                let mut l_spine = Spine::new(self.tm.clone(), l_context, self.root)?;
+                remove::remove_geq(&mut l_spine, key_low, split_low_fn)?;
 
-        let r_scope = scope_id::new_scope(self.tm.scopes());
-        let r_context = ReferenceContext::Scoped(r_scope.id);
-        let mut r_spine = Spine::new(self.tm.clone(), r_context, self.root)?;
-        remove::remove_lt(&mut r_spine, key_high, split_high_fn)?;
+                let r_scope = scope_id::new_scope(self.tm.scopes());
+                let r_context = ReferenceContext::Scoped(r_scope.id);
+                let mut r_spine = Spine::new(self.tm.clone(), r_context, self.root)?;
+                remove::remove_lt(&mut r_spine, key_high, split_high_fn)?;
 
-        remove::merge::<LeafV>(&mut l_spine, &mut r_spine)?;
-        self.root = l_spine.get_root();
+                remove::merge::<LeafV>(&mut l_spine, &mut r_spine)?;
+                self.root = l_spine.get_root();
 
-        Ok(())
+                Ok(())
+        */
     }
 
     //-------------------------------
@@ -420,6 +420,7 @@ impl<V: Serializable> BTree<V> {
         let mut last = None;
         for i in 0..node.nr_entries.get() {
             let k = node.keys.get(i as usize);
+            eprintln!("k = {}", k);
             ensure!(k >= key_min);
 
             if let Some(key_max) = key_max {
@@ -427,7 +428,10 @@ impl<V: Serializable> BTree<V> {
             }
 
             if let Some(last) = last {
-                ensure!(k > last);
+                if k <= last {
+                    eprintln!("keys out of order: {}, {}", last, k);
+                    ensure!(k > last);
+                }
             }
             last = Some(k);
         }
@@ -572,10 +576,6 @@ mod test {
             self.tree.insert(key, value)
         }
 
-        fn overwrite(&mut self, old_key: u32, new_key: u32, value: &Value) -> Result<()> {
-            self.tree.overwrite(old_key, new_key, value)
-        }
-
         fn remove(&mut self, key: u32) -> Result<Option<Value>> {
             self.tree.remove(key)
         }
@@ -621,11 +621,9 @@ mod test {
     }
 
     fn insert_test_(fix: &mut Fixture, keys: &[u32]) -> Result<()> {
-        eprintln!("inserting {} keys", keys.len());
         for (i, k) in keys.iter().enumerate() {
             fix.insert(*k, &mk_value(*k * 2))?;
             if i % 1000 == 0 {
-                eprintln!("{}", i);
                 let n = fix.check()?;
                 ensure!(n == i as u32 + 1);
             }
@@ -665,65 +663,6 @@ mod test {
         keys.shuffle(&mut rng);
 
         insert_test(&keys)
-    }
-
-    #[test]
-    fn overwrite_single() -> Result<()> {
-        let mut fix = Fixture::new(1024, 102400)?;
-        fix.commit()?;
-
-        fix.insert(0, &mk_value(100))?;
-        fix.commit()?; // FIXME: shouldn't be needed
-        ensure!(fix.lookup(0) == Some(mk_value(100)));
-
-        fix.overwrite(0, 100, &mk_value(123))?;
-        ensure!(fix.lookup(0) == None);
-        ensure!(fix.lookup(100) == Some(mk_value(123)));
-
-        Ok(())
-    }
-
-    #[test]
-    fn overwrite_many() -> Result<()> {
-        let count = 100_000;
-        let keys: Vec<u32> = (0..count).map(|n| n * 3).collect();
-
-        let mut fix = Fixture::new(1024, 102400)?;
-        fix.commit()?;
-        insert_test_(&mut fix, &keys)?;
-
-        // Overwrite all keys
-        for (i, k) in keys.iter().enumerate() {
-            fix.overwrite(*k, *k + 1, &mk_value(*k * 3))?;
-            if i % 100 == 0 {
-                eprintln!("{}", i);
-                let n = fix.check()?;
-                ensure!(n == count);
-            }
-        }
-
-        // Verify
-        for k in keys {
-            ensure!(fix.lookup(k) == None);
-            ensure!(fix.lookup(k + 1) == Some(mk_value(k * 3)));
-        }
-
-        Ok(())
-    }
-
-    #[test]
-    #[cfg(debug_assertions)]
-    fn overwrite_bad_key() -> Result<()> {
-        let keys: Vec<u32> = (0..10).map(|n| n * 3).collect();
-
-        let mut fix = Fixture::new(1024, 102400)?;
-        fix.commit()?;
-        insert_test_(&mut fix, &keys)?;
-
-        ensure!(fix.overwrite(0, 10, &mk_value(100)).is_err());
-        ensure!(fix.overwrite(9, 0, &mk_value(100)).is_err());
-
-        Ok(())
     }
 
     #[test]

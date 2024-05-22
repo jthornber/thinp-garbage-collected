@@ -11,6 +11,7 @@ use crate::packed_array::*;
 
 //-------------------------------------------------------------------------
 
+// FIXME: 20 bits for time?
 const TIME_BITS: usize = 20;
 const LEN_BITS: usize = 12;
 const MAPPING_MAX_LEN: usize = 1 << LEN_BITS;
@@ -245,14 +246,14 @@ impl<Data: Writeable> Node<Data> {
 
     pub fn prepend(&mut self, keys: &[u32], mappings: &[Mapping]) {
         assert!(keys.len() == mappings.len());
-        self.keys.prepend(keys);
-        self.mappings.prepend(mappings);
+        self.keys.prepend_many(keys);
+        self.mappings.prepend_many(mappings);
         self.nr_entries.inc(keys.len() as u32);
     }
 
     pub fn append(&mut self, keys: &[u32], mappings: &[Mapping]) {
-        self.keys.append(keys);
-        self.mappings.append(mappings);
+        self.keys.append_many(keys);
+        self.mappings.append_many(mappings);
         self.nr_entries.inc(keys.len() as u32);
     }
 

@@ -193,7 +193,13 @@ impl<S: Serializable, Data: Writeable> PArray<S, Data> {
         self.nr_entries -= 1;
     }
 
-    pub fn prepend(&mut self, values: &[S]) {
+    pub fn prepend(&mut self, v: &S) {
+        assert!(self.nr_entries <= self.max_entries);
+        self.shift_right_(1);
+        self.set(0, v);
+    }
+
+    pub fn prepend_many(&mut self, values: &[S]) {
         assert!(self.nr_entries + values.len() <= self.max_entries);
         self.shift_right_(values.len());
         for (i, v) in values.iter().enumerate() {
@@ -201,19 +207,20 @@ impl<S: Serializable, Data: Writeable> PArray<S, Data> {
         }
     }
 
-    pub fn append(&mut self, values: &[S]) {
+    pub fn append(&mut self, v: &S) {
+        assert!(self.nr_entries <= self.max_entries);
+        let idx = self.nr_entries;
+        self.nr_entries += 1;
+        self.set(idx, v);
+    }
+
+    pub fn append_many(&mut self, values: &[S]) {
         assert!(self.nr_entries + values.len() <= self.max_entries);
         let nr_entries = self.nr_entries;
         self.nr_entries += values.len();
         for (i, v) in values.iter().enumerate() {
             self.set(nr_entries + i, v);
         }
-    }
-
-    pub fn append_single(&mut self, v: &S) {
-        assert!(self.nr_entries <= self.max_entries);
-        self.set(self.nr_entries, v);
-        self.nr_entries += 1;
     }
 }
 

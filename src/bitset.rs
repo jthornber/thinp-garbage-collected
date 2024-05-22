@@ -255,7 +255,7 @@ impl<Data: Readable> MetadataIndex<Data> {
 
 impl<Data: Writeable> MetadataIndex<Data> {
     fn append(&mut self, ies: &[IndexEntry]) -> Result<()> {
-        self.entries.append(ies);
+        self.entries.append_many(ies);
         self.nr_entries.inc(ies.len() as u32);
         Ok(())
     }

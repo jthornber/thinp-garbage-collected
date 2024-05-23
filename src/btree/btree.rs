@@ -343,19 +343,14 @@ impl<V: Serializable> BTree<V> {
         */
     }
 
-    pub fn remove_lt<SplitFn: FnOnce(u32, &V) -> (u32, V)>(
-        &mut self,
-        key: u32,
-        split_fn: SplitFn,
-    ) -> Result<()> {
-        todo!();
-
-        /*
-                let mut spine = self.mk_spine()?;
-                remove::remove_lt(&mut spine, key, split_fn)?;
-                self.root = spine.get_root();
-                Ok(())
-        */
+    pub fn remove_lt<SplitFn>(&mut self, key: u32, split_fn: SplitFn) -> Result<()>
+    where
+        SplitFn: FnOnce(u32, &V) -> Option<(u32, V)>,
+    {
+        let mut alloc = self.mk_alloc();
+        let new_root = remove::remove_lt(&mut alloc, self.root, key, split_fn)?;
+        self.root = new_root;
+        Ok(())
     }
 
     //-------------------------------
@@ -830,7 +825,7 @@ mod test {
         let mut fix = Fixture::new(1024, 102400)?;
         fix.commit()?;
 
-        let no_split = |k: u32, v: &Value| (k, *v);
+        let no_split = |k: u32, v: &Value| Some((k, *v));
 
         fix.tree.remove_lt(100, no_split)?;
         ensure!(fix.tree.check()? == 0);
@@ -866,7 +861,7 @@ mod test {
     }
 
     fn remove_lt_and_verify(fix: &mut Fixture, count: u32, cut: u32) -> Result<()> {
-        let no_split = |k: u32, v: &Value| (k, *v);
+        let no_split = |k: u32, v: &Value| Some((k, *v));
         fix.tree.remove_lt(cut, no_split)?;
         ensure!(fix.tree.check()? == count - cut);
 
@@ -971,15 +966,15 @@ mod test {
         let cut = 150;
         let split = |k: u32, v: &Value| {
             if k < cut && k + v.len >= cut {
-                (
+                Some((
                     cut,
                     Value {
                         v: v.v,
                         len: (k + v.len) - cut,
                     },
-                )
+                ))
             } else {
-                (k, *v)
+                Some((k, *v))
             }
         };
 

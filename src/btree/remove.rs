@@ -243,12 +243,10 @@ where
                 }
             }
 
-            let count = node.nr_entries.get() as usize - idx - 1;
-            node.remove_right(count);
+            node.remove_from(idx + 1);
         }
         Shift(idx) => {
-            let count = node.nr_entries.get() as usize - idx;
-            node.shift_left(count);
+            node.remove_from(idx);
         }
     }
 
@@ -281,13 +279,10 @@ where
                     node.values.set(idx, &new_value);
                 }
             }
-            let count = node.nr_entries.get() as usize - idx - 1;
-            node.remove_right(count);
+            node.remove_from(idx + 1);
         }
         Shift(idx) => {
-            let count = node.nr_entries.get() as usize - idx;
-            // FIXME: add variants of remove_right and shift_left that don't return the old vals.
-            node.remove_right(count);
+            node.remove_from(idx);
         }
     }
 

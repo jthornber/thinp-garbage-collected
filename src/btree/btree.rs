@@ -329,20 +329,14 @@ impl<V: Serializable> BTree<V> {
         }
     }
 
-    pub fn remove_geq<SplitFn>(&mut self, key: u32, split_fn: SplitFn) -> Result<()>
-    where
-        SplitFn: Fn(u32, &V) -> Option<(u32, V)>,
-    {
+    pub fn remove_geq(&mut self, key: u32, split_fn: &remove::SplitFn<V>) -> Result<()> {
         let mut alloc = self.mk_alloc();
         let new_root = remove::remove_geq(&mut alloc, self.root, key, &split_fn)?;
         self.root = new_root;
         Ok(())
     }
 
-    pub fn remove_lt<SplitFn>(&mut self, key: u32, split_fn: SplitFn) -> Result<()>
-    where
-        SplitFn: Fn(u32, &V) -> Option<(u32, V)>,
-    {
+    pub fn remove_lt(&mut self, key: u32, split_fn: &remove::SplitFn<V>) -> Result<()> {
         let mut alloc = self.mk_alloc();
         let new_root = remove::remove_lt(&mut alloc, self.root, key, &split_fn)?;
         self.root = new_root;
@@ -360,16 +354,15 @@ impl<V: Serializable> BTree<V> {
         todo!();
     }
 
-    pub fn remove_range<LeafV, SplitFn>(
+    pub fn remove_range<LeafV>(
         &mut self,
         key_begin: u32,
         key_end: u32,
-        split_lt: &SplitFn,
-        split_geq: &SplitFn,
+        split_lt: &remove::SplitFn<LeafV>,
+        split_geq: &remove::SplitFn<LeafV>,
     ) -> Result<()>
     where
         LeafV: Serializable,
-        SplitFn: Fn(u32, &LeafV) -> Option<(u32, LeafV)>,
     {
         let mut alloc = self.mk_alloc();
         self.root = remove::remove_range(
@@ -796,9 +789,9 @@ mod test {
         let mut fix = Fixture::new(1024, 102400)?;
         fix.commit()?;
 
-        let no_split = |k: u32, v: &Value| Some((k, *v));
+        let no_split = |k: u32, v: Value| Some((k, v));
 
-        fix.tree.remove_geq(100, no_split)?;
+        fix.tree.remove_geq(100, &remove::mk_split_fn(no_split))?;
         ensure!(fix.tree.check()? == 0);
         Ok(())
     }
@@ -808,9 +801,9 @@ mod test {
         let mut fix = Fixture::new(1024, 102400)?;
         fix.commit()?;
 
-        let no_split = |k: u32, v: &Value| Some((k, *v));
+        let no_split = |k: u32, v: Value| Some((k, v));
 
-        fix.tree.remove_lt(100, no_split)?;
+        fix.tree.remove_lt(100, &remove::mk_split_fn(no_split))?;
         ensure!(fix.tree.check()? == 0);
         Ok(())
     }
@@ -826,8 +819,8 @@ mod test {
     }
 
     fn remove_geq_and_verify(fix: &mut Fixture, cut: u32) -> Result<()> {
-        let no_split = |k: u32, v: &Value| Some((k, *v));
-        fix.tree.remove_geq(cut, no_split)?;
+        let no_split = |k: u32, v: Value| Some((k, v));
+        fix.tree.remove_geq(cut, &remove::mk_split_fn(no_split))?;
         ensure!(fix.tree.check()? == cut);
 
         let mut c = fix.tree.cursor(0)?;
@@ -844,8 +837,8 @@ mod test {
     }
 
     fn remove_lt_and_verify(fix: &mut Fixture, count: u32, cut: u32) -> Result<()> {
-        let no_split = |k: u32, v: &Value| Some((k, *v));
-        fix.tree.remove_lt(cut, no_split)?;
+        let no_split = |k: u32, v: Value| Some((k, v));
+        fix.tree.remove_lt(cut, &remove::mk_split_fn(no_split))?;
         ensure!(fix.tree.check()? == count - cut);
 
         let mut c = fix.tree.cursor(0)?;
@@ -919,7 +912,7 @@ mod test {
         let mut fix = Fixture::new(1024, 102400)?;
 
         let cut = 150;
-        let split = |k: u32, v: &Value| {
+        let split = |k: u32, v: Value| {
             if k + v.len > cut {
                 Some((
                     k,
@@ -929,12 +922,12 @@ mod test {
                     },
                 ))
             } else {
-                Some((k, *v))
+                Some((k, v))
             }
         };
 
         fix.insert(100, &Value { v: 200, len: 100 })?;
-        fix.tree.remove_geq(150, split)?;
+        fix.tree.remove_geq(150, &remove::mk_split_fn(split))?;
 
         ensure!(fix.tree.check()? == 1);
         ensure!(fix.tree.lookup(100)?.unwrap() == Value { v: 200, len: 50 });
@@ -947,7 +940,7 @@ mod test {
         let mut fix = Fixture::new(1024, 102400)?;
 
         let cut = 150;
-        let split = |k: u32, v: &Value| {
+        let split = |k: u32, v: Value| {
             if k < cut && k + v.len >= cut {
                 Some((
                     cut,
@@ -957,12 +950,12 @@ mod test {
                     },
                 ))
             } else {
-                Some((k, *v))
+                Some((k, v))
             }
         };
 
         fix.insert(100, &Value { v: 200, len: 100 })?;
-        fix.tree.remove_lt(150, split)?;
+        fix.tree.remove_lt(150, &remove::mk_split_fn(split))?;
 
         ensure!(fix.tree.check()? == 1);
         ensure!(fix.tree.lookup(150)?.unwrap() == Value { v: 200, len: 50 });
@@ -976,7 +969,7 @@ mod test {
         let range_begin = 150;
         let range_end = 175;
 
-        let split_low = |k: u32, v: &Value| {
+        let split_low = move |k: u32, v: Value| {
             if k + v.len > range_begin {
                 Some((
                     k,
@@ -986,11 +979,11 @@ mod test {
                     },
                 ))
             } else {
-                Some((k, *v))
+                Some((k, v))
             }
         };
 
-        let split_high = |k: u32, v: &Value| {
+        let split_high = move |k: u32, v: Value| {
             if k < range_end && k + v.len >= range_end {
                 Some((
                     range_end,
@@ -1000,13 +993,17 @@ mod test {
                     },
                 ))
             } else {
-                Some((k, *v))
+                Some((k, v))
             }
         };
 
         fix.insert(100, &Value { v: 200, len: 100 })?;
-        fix.tree
-            .remove_range(range_begin, range_end, &split_low, &split_high)?;
+        fix.tree.remove_range(
+            range_begin,
+            range_end,
+            &remove::mk_split_fn(split_low),
+            &remove::mk_split_fn(split_high),
+        )?;
 
         ensure!(fix.tree.check()? == 2);
         ensure!(fix.tree.lookup(100)?.unwrap() == Value { v: 200, len: 50 });
@@ -1028,36 +1025,40 @@ mod test {
         let range_begin = 1001;
         let range_end = 2005;
 
-        let split_low = |k: u32, v: &Value| {
+        let split_low = |k: u32, v: Value| {
             if k + v.len > range_begin {
-                (
+                Some((
                     k,
                     Value {
                         v: v.v,
                         len: range_begin - k,
                     },
-                )
+                ))
             } else {
-                (k, *v)
+                Some((k, v))
             }
         };
 
-        let split_high = |k: u32, v: &Value| {
+        let split_high = |k: u32, v: Value| {
             if k < range_end && k + v.len >= range_end {
-                (
+                Some((
                     range_end,
                     Value {
                         v: v.v,
                         len: (k + v.len) - range_end,
                     },
-                )
+                ))
             } else {
-                (k, *v)
+                Some((k, v))
             }
         };
 
-        fix.tree
-            .remove_range(range_begin, range_end, split_low, split_high)?;
+        fix.tree.remove_range(
+            range_begin,
+            range_end,
+            &remove::mk_split_fn(split_low),
+            &remove::mk_split_fn(split_high),
+        )?;
         // fix.tree.remove_lt(range_end, split_high)?;
 
         let mut c = fix.tree.cursor(0)?;

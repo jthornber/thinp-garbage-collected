@@ -116,11 +116,11 @@ fn remove_lt_internal<V, SplitFn>(
     alloc: &mut NodeAlloc,
     loc: MetadataBlock,
     key: u32,
-    split_fn: SplitFn,
+    split_fn: &SplitFn,
 ) -> Result<(Option<u32>, MetadataBlock)>
 where
     V: Serializable,
-    SplitFn: FnOnce(u32, &V) -> Option<(u32, V)>,
+    SplitFn: Fn(u32, &V) -> Option<(u32, V)>,
 {
     use SplitOp::*;
 
@@ -152,11 +152,11 @@ fn remove_lt_leaf<V, SplitFn>(
     alloc: &mut NodeAlloc,
     loc: MetadataBlock,
     key: u32,
-    split_fn: SplitFn,
+    split_fn: &SplitFn,
 ) -> Result<(Option<u32>, MetadataBlock)>
 where
     V: Serializable,
-    SplitFn: FnOnce(u32, &V) -> Option<(u32, V)>,
+    SplitFn: Fn(u32, &V) -> Option<(u32, V)>,
 {
     use SplitOp::*;
 
@@ -188,11 +188,11 @@ pub fn remove_lt_recurse<LeafV, SplitFn>(
     alloc: &mut NodeAlloc,
     loc: MetadataBlock,
     key: u32,
-    split_fn: SplitFn,
+    split_fn: &SplitFn,
 ) -> Result<(Option<u32>, MetadataBlock)>
 where
     LeafV: Serializable,
-    SplitFn: FnOnce(u32, &LeafV) -> Option<(u32, LeafV)>,
+    SplitFn: Fn(u32, &LeafV) -> Option<(u32, LeafV)>,
 {
     if alloc.is_internal(loc)? {
         remove_lt_internal(alloc, loc, key, split_fn)
@@ -205,11 +205,11 @@ pub fn remove_lt<LeafV, SplitFn>(
     alloc: &mut NodeAlloc,
     root: MetadataBlock,
     key: u32,
-    split_fn: SplitFn,
+    split_fn: &SplitFn,
 ) -> Result<MetadataBlock>
 where
     LeafV: Serializable,
-    SplitFn: FnOnce(u32, &LeafV) -> Option<(u32, LeafV)>,
+    SplitFn: Fn(u32, &LeafV) -> Option<(u32, LeafV)>,
 {
     let (_, new_root) = remove_lt_recurse(alloc, root, key, split_fn)?;
     Ok(new_root)
@@ -221,11 +221,11 @@ fn remove_geq_internal<V, SplitFn>(
     alloc: &mut NodeAlloc,
     loc: MetadataBlock,
     key: u32,
-    split_fn: SplitFn,
+    split_fn: &SplitFn,
 ) -> Result<(Option<u32>, MetadataBlock)>
 where
     V: Serializable,
-    SplitFn: FnOnce(u32, &V) -> Option<(u32, V)>,
+    SplitFn: Fn(u32, &V) -> Option<(u32, V)>,
 {
     use SplitOp::*;
 
@@ -257,11 +257,11 @@ fn remove_geq_leaf<V, SplitFn>(
     alloc: &mut NodeAlloc,
     loc: MetadataBlock,
     key: u32,
-    split_fn: SplitFn,
+    split_fn: &SplitFn,
 ) -> Result<(Option<u32>, MetadataBlock)>
 where
     V: Serializable,
-    SplitFn: FnOnce(u32, &V) -> Option<(u32, V)>,
+    SplitFn: Fn(u32, &V) -> Option<(u32, V)>,
 {
     use SplitOp::*;
 
@@ -292,11 +292,11 @@ pub fn remove_geq_recurse<LeafV, SplitFn>(
     alloc: &mut NodeAlloc,
     loc: MetadataBlock,
     key: u32,
-    split_fn: SplitFn,
+    split_fn: &SplitFn,
 ) -> Result<(Option<u32>, MetadataBlock)>
 where
     LeafV: Serializable,
-    SplitFn: FnOnce(u32, &LeafV) -> Option<(u32, LeafV)>,
+    SplitFn: Fn(u32, &LeafV) -> Option<(u32, LeafV)>,
 {
     if alloc.is_internal(loc)? {
         remove_geq_internal(alloc, loc, key, split_fn)
@@ -309,13 +309,176 @@ pub fn remove_geq<LeafV, SplitFn>(
     alloc: &mut NodeAlloc,
     root: MetadataBlock,
     key: u32,
-    split_fn: SplitFn,
+    split_fn: &SplitFn,
 ) -> Result<MetadataBlock>
 where
     LeafV: Serializable,
-    SplitFn: FnOnce(u32, &LeafV) -> Option<(u32, LeafV)>,
+    SplitFn: Fn(u32, &LeafV) -> Option<(u32, LeafV)>,
 {
     let (_, new_root) = remove_geq_recurse(alloc, root, key, split_fn)?;
+    Ok(new_root)
+}
+
+//-------------------------------------------------------------------------
+
+// All usizes are indexes
+enum RangeOp {
+    TrimLt(usize),
+    TrimGeq(usize),
+    Erase(usize, usize),
+}
+
+type RangeProgram = Vec<RangeOp>;
+
+// All indexes in the program are *before* any operations were executed
+fn range_split<NV: Serializable>(node: &WNode<NV>, key_begin: u32, key_end: u32) -> RangeProgram {
+    todo!();
+}
+
+fn remove_range_internal<V, SplitFn>(
+    alloc: &mut NodeAlloc,
+    loc: MetadataBlock,
+    key_begin: u32,
+    key_end: u32,
+    split_lt: &SplitFn,
+    split_geq: &SplitFn,
+) -> Result<(Option<u32>, MetadataBlock)>
+where
+    V: Serializable,
+    SplitFn: Fn(u32, &V) -> Option<(u32, V)>,
+{
+    use RangeOp::*;
+
+    let mut node = alloc.shadow::<MetadataBlock>(loc)?;
+    let prog = range_split(&node, key_begin, key_end);
+
+    let mut delta = 0;
+    for op in prog {
+        match op {
+            TrimLt(idx) => {
+                let idx = idx - delta;
+                match remove_lt_recurse(alloc, node.values.get(idx), key_end, split_lt)? {
+                    (None, _loc) => {
+                        node.remove_at(idx);
+                    }
+                    (Some(new_key), loc) => {
+                        node.keys.set(idx, &new_key);
+                        node.values.set(idx, &loc);
+                    }
+                }
+            }
+            TrimGeq(idx) => {
+                let idx = idx - delta;
+                match remove_geq_recurse(alloc, node.values.get(idx), key_begin, split_geq)? {
+                    (None, _loc) => {
+                        node.remove_at(idx);
+                    }
+                    (Some(new_key), loc) => {
+                        node.keys.set(idx, &new_key);
+                        node.values.set(idx, &loc);
+                    }
+                }
+            }
+            Erase(idx_b, idx_e) => {
+                let idx_b = idx_b - delta;
+                let idx_e = idx_e - delta;
+                node.erase(idx_b, idx_e);
+                delta += idx_e - idx_b;
+            }
+        }
+    }
+
+    Ok(node_result(node))
+}
+
+fn remove_range_leaf<V, SplitFn>(
+    alloc: &mut NodeAlloc,
+    loc: MetadataBlock,
+    key_begin: u32,
+    key_end: u32,
+    split_lt: &SplitFn,
+    split_geq: &SplitFn,
+) -> Result<(Option<u32>, MetadataBlock)>
+where
+    V: Serializable,
+    SplitFn: Fn(u32, &V) -> Option<(u32, V)>,
+{
+    use RangeOp::*;
+
+    let mut node = alloc.shadow::<V>(loc)?;
+    let prog = range_split(&node, key_begin, key_end);
+
+    let mut delta = 0;
+    for op in prog {
+        match op {
+            TrimLt(idx) => {
+                let idx = idx - delta;
+                match split_lt(node.keys.get(idx), &node.values.get(idx)) {
+                    None => {
+                        node.remove_at(idx);
+                    }
+                    Some((new_key, loc)) => {
+                        node.keys.set(idx, &new_key);
+                        node.values.set(idx, &loc);
+                    }
+                }
+            }
+            TrimGeq(idx) => {
+                let idx = idx - delta;
+                match split_geq(node.keys.get(idx), &node.values.get(idx)) {
+                    None => {
+                        node.remove_at(idx);
+                    }
+                    Some((new_key, loc)) => {
+                        node.keys.set(idx, &new_key);
+                        node.values.set(idx, &loc);
+                    }
+                }
+            }
+            Erase(idx_b, idx_e) => {
+                let idx_b = idx_b - delta;
+                let idx_e = idx_e - delta;
+                node.erase(idx_b, idx_e);
+                delta += idx_e - idx_b;
+            }
+        }
+    }
+
+    Ok(node_result(node))
+}
+
+pub fn remove_range_recurse<V, SplitFn>(
+    alloc: &mut NodeAlloc,
+    loc: MetadataBlock,
+    key_begin: u32,
+    key_end: u32,
+    split_lt: &SplitFn,
+    split_geq: &SplitFn,
+) -> Result<(Option<u32>, MetadataBlock)>
+where
+    V: Serializable,
+    SplitFn: Fn(u32, &V) -> Option<(u32, V)>,
+{
+    if alloc.is_internal(loc)? {
+        remove_range_internal(alloc, loc, key_begin, key_end, split_lt, split_geq)
+    } else {
+        remove_range_leaf(alloc, loc, key_begin, key_end, split_lt, split_geq)
+    }
+}
+
+pub fn remove_range<V, SplitFn>(
+    alloc: &mut NodeAlloc,
+    root: MetadataBlock,
+    key_begin: u32,
+    key_end: u32,
+    split_lt: &SplitFn,
+    split_geq: &SplitFn,
+) -> Result<MetadataBlock>
+where
+    V: Serializable,
+    SplitFn: Fn(u32, &V) -> Option<(u32, V)>,
+{
+    let (_, new_root) = remove_range_recurse(alloc, root, key_begin, key_end, split_lt, split_geq)?;
     Ok(new_root)
 }
 

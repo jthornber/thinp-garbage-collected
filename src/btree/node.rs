@@ -196,6 +196,12 @@ impl<V: Serializable, Data: Writeable> Node<V, Data> {
         self.values.remove_from(idx);
         self.nr_entries.set(idx as u32);
     }
+
+    pub fn erase(&mut self, idx_b: usize, idx_e: usize) {
+        self.keys.erase(idx_b, idx_e);
+        self.values.erase(idx_b, idx_e);
+        self.nr_entries.dec((idx_e - idx_b) as u32);
+    }
 }
 
 // FIXME: remove these, I don't think they add much now it's parameterised by V

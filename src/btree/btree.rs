@@ -331,20 +331,20 @@ impl<V: Serializable> BTree<V> {
 
     pub fn remove_geq<SplitFn>(&mut self, key: u32, split_fn: SplitFn) -> Result<()>
     where
-        SplitFn: FnOnce(u32, &V) -> Option<(u32, V)>,
+        SplitFn: Fn(u32, &V) -> Option<(u32, V)>,
     {
         let mut alloc = self.mk_alloc();
-        let new_root = remove::remove_geq(&mut alloc, self.root, key, split_fn)?;
+        let new_root = remove::remove_geq(&mut alloc, self.root, key, &split_fn)?;
         self.root = new_root;
         Ok(())
     }
 
     pub fn remove_lt<SplitFn>(&mut self, key: u32, split_fn: SplitFn) -> Result<()>
     where
-        SplitFn: FnOnce(u32, &V) -> Option<(u32, V)>,
+        SplitFn: Fn(u32, &V) -> Option<(u32, V)>,
     {
         let mut alloc = self.mk_alloc();
-        let new_root = remove::remove_lt(&mut alloc, self.root, key, split_fn)?;
+        let new_root = remove::remove_lt(&mut alloc, self.root, key, &split_fn)?;
         self.root = new_root;
         Ok(())
     }
@@ -360,35 +360,22 @@ impl<V: Serializable> BTree<V> {
         todo!();
     }
 
-    pub fn remove_range<LeafV, SplitLowFn, SplitHighFn>(
+    pub fn remove_range<LeafV, SplitFn>(
         &mut self,
-        key_low: u32,
-        key_high: u32,
-        split_low_fn: SplitLowFn,
-        split_high_fn: SplitHighFn,
+        key_begin: u32,
+        key_end: u32,
+        split_lt: &SplitFn,
+        split_geq: &SplitFn,
     ) -> Result<()>
     where
         LeafV: Serializable,
-        SplitLowFn: FnOnce(u32, &LeafV) -> (u32, LeafV),
-        SplitHighFn: FnOnce(u32, &LeafV) -> (u32, LeafV),
+        SplitFn: Fn(u32, &LeafV) -> Option<(u32, LeafV)>,
     {
-        todo!();
-        /*
-                let l_scope = scope_id::new_scope(self.tm.scopes());
-                let l_context = ReferenceContext::Scoped(l_scope.id);
-                let mut l_spine = Spine::new(self.tm.clone(), l_context, self.root)?;
-                remove::remove_geq(&mut l_spine, key_low, split_low_fn)?;
-
-                let r_scope = scope_id::new_scope(self.tm.scopes());
-                let r_context = ReferenceContext::Scoped(r_scope.id);
-                let mut r_spine = Spine::new(self.tm.clone(), r_context, self.root)?;
-                remove::remove_lt(&mut r_spine, key_high, split_high_fn)?;
-
-                remove::merge::<LeafV>(&mut l_spine, &mut r_spine)?;
-                self.root = l_spine.get_root();
-
-                Ok(())
-        */
+        let mut alloc = self.mk_alloc();
+        self.root = remove::remove_range(
+            &mut alloc, self.root, key_begin, key_end, split_lt, split_geq,
+        )?;
+        Ok(())
     }
 
     //-------------------------------
@@ -991,35 +978,35 @@ mod test {
 
         let split_low = |k: u32, v: &Value| {
             if k + v.len > range_begin {
-                (
+                Some((
                     k,
                     Value {
                         v: v.v,
                         len: range_begin - k,
                     },
-                )
+                ))
             } else {
-                (k, *v)
+                Some((k, *v))
             }
         };
 
         let split_high = |k: u32, v: &Value| {
             if k < range_end && k + v.len >= range_end {
-                (
+                Some((
                     range_end,
                     Value {
                         v: v.v,
                         len: (k + v.len) - range_end,
                     },
-                )
+                ))
             } else {
-                (k, *v)
+                Some((k, *v))
             }
         };
 
         fix.insert(100, &Value { v: 200, len: 100 })?;
         fix.tree
-            .remove_range(range_begin, range_end, split_low, split_high)?;
+            .remove_range(range_begin, range_end, &split_low, &split_high)?;
 
         ensure!(fix.tree.check()? == 2);
         ensure!(fix.tree.lookup(100)?.unwrap() == Value { v: 200, len: 50 });

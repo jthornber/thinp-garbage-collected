@@ -227,6 +227,18 @@ impl<S: Serializable, Data: Writeable> PArray<S, Data> {
             self.set(nr_entries + i, v);
         }
     }
+
+    pub fn erase(&mut self, idx_b: usize, idx_e: usize) {
+        assert!(idx_b < self.nr_entries);
+        assert!(idx_e <= self.nr_entries);
+        if idx_e < self.nr_entries {
+            self.data.rw().copy_within(
+                Self::byte(idx_e)..Self::byte(self.nr_entries),
+                Self::byte(idx_b),
+            );
+        }
+        self.nr_entries -= idx_e - idx_b;
+    }
 }
 
 //-------------------------------------------------------------------------

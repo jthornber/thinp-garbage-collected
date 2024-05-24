@@ -152,6 +152,13 @@ impl<V: Serializable, Data: Writeable> Node<V, Data> {
         (keys, values)
     }
 
+    // Variant of shift_left() that doesn't return the dropped values
+    pub fn shift_left_no_return(&mut self, count: usize) {
+        self.keys.shift_left_no_return(count);
+        self.values.shift_left_no_return(count);
+        self.nr_entries.dec(count as u32);
+    }
+
     pub fn prepend(&mut self, key: u32, value: &V) {
         self.keys.prepend(&key);
         self.values.prepend(value);

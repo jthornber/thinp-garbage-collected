@@ -138,10 +138,10 @@ where
                 }
             }
 
-            node.shift_left(idx);
+            node.shift_left_no_return(idx);
         }
         Shift(idx) => {
-            node.shift_left(idx);
+            node.shift_left_no_return(idx);
         }
     }
 
@@ -174,10 +174,10 @@ where
                     node.values.set(idx, &new_value);
                 }
             }
-            node.shift_left(idx);
+            node.shift_left_no_return(idx);
         }
         Shift(idx) => {
-            node.shift_left(idx);
+            node.shift_left_no_return(idx);
         }
     }
 

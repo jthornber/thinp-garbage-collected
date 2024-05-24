@@ -149,6 +149,11 @@ impl<S: Serializable, Data: Writeable> PArray<S, Data> {
         lost
     }
 
+    pub fn shift_left_no_return(&mut self, count: usize) {
+        self.data.rw().copy_within(Self::byte(count).., 0);
+        self.nr_entries -= count;
+    }
+
     fn shift_right_(&mut self, count: usize) {
         self.data
             .rw()

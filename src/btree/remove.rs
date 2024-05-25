@@ -86,6 +86,7 @@ pub fn remove<V: Serializable>(
 
 //-------------------------------------------------------------------------
 
+// FIXME: We don't need to return an Option since we know this is an overlap?
 pub type SplitFn<'a, V> = Box<dyn Fn(u32, V) -> Option<(u32, V)> + 'a>;
 
 pub fn mk_split_fn<'a, V, F>(f: F) -> SplitFn<'a, V>
@@ -324,17 +325,56 @@ where
 //-------------------------------------------------------------------------
 
 // All usizes are indexes
+// FIXME: Trim ops should hold the key they're trimming against too
 enum RangeOp {
     TrimLt(usize),
     TrimGeq(usize),
     Erase(usize, usize),
 }
 
+// FIXME: running a TrimGeq followed by a TrimLt (no intervening Erase) can result
+// in an extra value.
+
 type RangeProgram = Vec<RangeOp>;
 
 // All indexes in the program are *before* any operations were executed
 fn range_split<NV: Serializable>(node: &WNode<NV>, key_begin: u32, key_end: u32) -> RangeProgram {
-    todo!();
+    use RangeOp::*;
+
+    let mut prog = Vec::new();
+
+    if node.is_empty() {
+        // no entries
+        return prog;
+    }
+
+    if key_end <= node.keys.get(0) {
+        // remove range is before this node
+        return prog;
+    }
+
+    let mut b_idx = node.keys.bsearch(&key_begin);
+    let mut e_idx = node.keys.bsearch(&key_end);
+
+    if b_idx >= 0 && node.keys.get(b_idx as usize) < key_begin {
+        prog.push(TrimGeq(b_idx as usize));
+    }
+
+    b_idx += 1;
+
+    if e_idx < 0 {
+        e_idx = 0;
+    }
+
+    if b_idx < e_idx {
+        prog.push(Erase(b_idx as usize, e_idx as usize));
+    }
+
+    if node.keys.get(e_idx as usize) < key_end {
+        prog.push(TrimLt(e_idx as usize));
+    }
+
+    prog
 }
 
 fn remove_range_internal<V>(
@@ -412,30 +452,34 @@ where
     for op in prog {
         match op {
             TrimLt(idx) => {
+                eprintln!("exec TrimLt({})", idx);
                 let idx = idx - delta;
                 match split_lt(node.keys.get(idx), node.values.get(idx)) {
                     None => {
                         node.remove_at(idx);
                     }
-                    Some((new_key, loc)) => {
+                    Some((new_key, v)) => {
+                        eprintln!("new_v = {:?}", v);
                         node.keys.set(idx, &new_key);
-                        node.values.set(idx, &loc);
+                        node.values.set(idx, &v);
                     }
                 }
             }
             TrimGeq(idx) => {
+                eprintln!("exec TrimGeq({})", idx);
                 let idx = idx - delta;
                 match split_geq(node.keys.get(idx), node.values.get(idx)) {
                     None => {
                         node.remove_at(idx);
                     }
-                    Some((new_key, loc)) => {
+                    Some((new_key, v)) => {
                         node.keys.set(idx, &new_key);
-                        node.values.set(idx, &loc);
+                        node.values.set(idx, &v);
                     }
                 }
             }
             Erase(idx_b, idx_e) => {
+                eprintln!("exec Erase({}, {})", idx_b, idx_e);
                 let idx_b = idx_b - delta;
                 let idx_e = idx_e - delta;
                 node.erase(idx_b, idx_e);

@@ -362,7 +362,7 @@ impl<V: Serializable> BTree<V> {
         split_geq: &remove::SplitFn<LeafV>,
     ) -> Result<()>
     where
-        LeafV: Serializable,
+        LeafV: Serializable + Copy,
     {
         let mut alloc = self.mk_alloc();
         self.root = remove::remove_range(

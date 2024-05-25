@@ -129,9 +129,18 @@ impl<V: Serializable, Data: Readable> Node<V, Data> {
     pub fn is_empty(&self) -> bool {
         self.nr_entries() == 0
     }
+
+    pub fn is_full(&self) -> bool {
+        self.nr_entries() == Self::max_entries()
+    }
 }
 
 impl<V: Serializable, Data: Writeable> Node<V, Data> {
+    pub fn overwrite_at(&mut self, idx: usize, k: u32, value: &V) {
+        self.keys.set(idx, &k);
+        self.values.set(idx, value);
+    }
+
     pub fn insert_at(&mut self, idx: usize, key: u32, value: &V) {
         self.keys.insert_at(idx, &key);
         self.values.insert_at(idx, value);
@@ -205,6 +214,8 @@ impl<V: Serializable, Data: Writeable> Node<V, Data> {
 }
 
 // FIXME: remove these, I don't think they add much now it's parameterised by V
+// FIXME: replace with a Cow like type that defers shadowing until we really
+// modify the node.
 pub type RNode<V> = Node<V, ReadProxy>;
 pub type WNode<V> = Node<V, WriteProxy>;
 

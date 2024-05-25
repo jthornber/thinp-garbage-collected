@@ -19,7 +19,7 @@ fn min_key(alloc: &mut NodeAlloc, loc: MetadataBlock) -> Result<u32> {
     Ok(node.keys.get(0))
 }
 
-fn redistribute2<NV: Serializable>(left: &mut WNode<NV>, right: &mut WNode<NV>) {
+pub fn redistribute2<NV: Serializable>(left: &mut WNode<NV>, right: &mut WNode<NV>) {
     let nr_left = left.nr_entries.get() as usize;
     let nr_right = right.nr_entries.get() as usize;
     let total = nr_left + nr_right;

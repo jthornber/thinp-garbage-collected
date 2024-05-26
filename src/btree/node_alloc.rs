@@ -32,10 +32,6 @@ impl NodeAlloc {
     pub fn shadow<NV: Serializable>(&mut self, loc: MetadataBlock) -> Result<WNode<NV>> {
         Ok(w_node(self.tm.shadow(self.context, loc, &BNODE_KIND)?))
     }
-
-    pub fn read<NV: Serializable>(&mut self, loc: MetadataBlock) -> Result<RNode<NV>> {
-        Ok(r_node(self.tm.read(loc, &BNODE_KIND)?))
-    }
 }
 
 //-------------------------------------------------------------------------

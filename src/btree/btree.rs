@@ -329,16 +329,16 @@ impl<V: Serializable> BTree<V> {
         }
     }
 
-    pub fn remove_geq(&mut self, key: u32, split_fn: &remove::SplitFn<V>) -> Result<()> {
+    pub fn remove_geq(&mut self, key: u32, val_fn: &remove::ValFn<V>) -> Result<()> {
         let mut alloc = self.mk_alloc();
-        let new_root = remove::remove_geq(&mut alloc, self.root, key, &split_fn)?;
+        let new_root = remove::remove_geq(&mut alloc, self.root, key, &val_fn)?;
         self.root = new_root;
         Ok(())
     }
 
-    pub fn remove_lt(&mut self, key: u32, split_fn: &remove::SplitFn<V>) -> Result<()> {
+    pub fn remove_lt(&mut self, key: u32, val_fn: &remove::ValFn<V>) -> Result<()> {
         let mut alloc = self.mk_alloc();
-        let new_root = remove::remove_lt(&mut alloc, self.root, key, &split_fn)?;
+        let new_root = remove::remove_lt(&mut alloc, self.root, key, &val_fn)?;
         self.root = new_root;
         Ok(())
     }
@@ -358,16 +358,15 @@ impl<V: Serializable> BTree<V> {
         &mut self,
         key_begin: u32,
         key_end: u32,
-        split_lt: &remove::SplitFn<LeafV>,
-        split_geq: &remove::SplitFn<LeafV>,
+        val_lt: &remove::ValFn<LeafV>,
+        val_geq: &remove::ValFn<LeafV>,
     ) -> Result<()>
     where
         LeafV: Serializable + Copy,
     {
         let mut alloc = self.mk_alloc();
-        self.root = remove::remove_range(
-            &mut alloc, self.root, key_begin, key_end, split_lt, split_geq,
-        )?;
+        self.root =
+            remove::remove_range(&mut alloc, self.root, key_begin, key_end, val_lt, val_geq)?;
         Ok(())
     }
 
@@ -791,7 +790,7 @@ mod test {
 
         let no_split = |k: u32, v: Value| Some((k, v));
 
-        fix.tree.remove_geq(100, &remove::mk_split_fn(no_split))?;
+        fix.tree.remove_geq(100, &remove::mk_val_fn(no_split))?;
         ensure!(fix.tree.check()? == 0);
         Ok(())
     }
@@ -803,7 +802,7 @@ mod test {
 
         let no_split = |k: u32, v: Value| Some((k, v));
 
-        fix.tree.remove_lt(100, &remove::mk_split_fn(no_split))?;
+        fix.tree.remove_lt(100, &remove::mk_val_fn(no_split))?;
         ensure!(fix.tree.check()? == 0);
         Ok(())
     }
@@ -820,7 +819,7 @@ mod test {
 
     fn remove_geq_and_verify(fix: &mut Fixture, cut: u32) -> Result<()> {
         let no_split = |k: u32, v: Value| Some((k, v));
-        fix.tree.remove_geq(cut, &remove::mk_split_fn(no_split))?;
+        fix.tree.remove_geq(cut, &remove::mk_val_fn(no_split))?;
         ensure!(fix.tree.check()? == cut);
 
         let mut c = fix.tree.cursor(0)?;
@@ -838,7 +837,7 @@ mod test {
 
     fn remove_lt_and_verify(fix: &mut Fixture, count: u32, cut: u32) -> Result<()> {
         let no_split = |k: u32, v: Value| Some((k, v));
-        fix.tree.remove_lt(cut, &remove::mk_split_fn(no_split))?;
+        fix.tree.remove_lt(cut, &remove::mk_val_fn(no_split))?;
         ensure!(fix.tree.check()? == count - cut);
 
         let mut c = fix.tree.cursor(0)?;
@@ -927,7 +926,7 @@ mod test {
         };
 
         fix.insert(100, &Value { v: 200, len: 100 })?;
-        fix.tree.remove_geq(150, &remove::mk_split_fn(split))?;
+        fix.tree.remove_geq(150, &remove::mk_val_fn(split))?;
 
         ensure!(fix.tree.check()? == 1);
         ensure!(fix.tree.lookup(100)?.unwrap() == Value { v: 200, len: 50 });
@@ -955,7 +954,7 @@ mod test {
         };
 
         fix.insert(100, &Value { v: 200, len: 100 })?;
-        fix.tree.remove_lt(150, &remove::mk_split_fn(split))?;
+        fix.tree.remove_lt(150, &remove::mk_val_fn(split))?;
 
         ensure!(fix.tree.check()? == 1);
         ensure!(fix.tree.lookup(150)?.unwrap() == Value { v: 200, len: 50 });
@@ -1001,8 +1000,8 @@ mod test {
         fix.tree.remove_range(
             range_begin,
             range_end,
-            &remove::mk_split_fn(split_low),
-            &remove::mk_split_fn(split_high),
+            &remove::mk_val_fn(split_high),
+            &remove::mk_val_fn(split_low),
         )?;
 
         ensure!(fix.tree.check()? == 2);
@@ -1056,8 +1055,8 @@ mod test {
         fix.tree.remove_range(
             range_begin,
             range_end,
-            &remove::mk_split_fn(split_low),
-            &remove::mk_split_fn(split_high),
+            &remove::mk_val_fn(split_low),
+            &remove::mk_val_fn(split_high),
         )?;
         // fix.tree.remove_lt(range_end, split_high)?;
 

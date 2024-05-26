@@ -180,10 +180,9 @@ fn node_insert_result(
 
 //-------------------------------------------------------------------------
 
-// FIXME: We don't need to return an Option since we know this is an overlap?
-pub type SplitFn<'a, V> = Box<dyn Fn(u32, V) -> Option<(u32, V)> + 'a>;
+pub type ValFn<'a, V> = Box<dyn Fn(u32, V) -> Option<(u32, V)> + 'a>;
 
-pub fn mk_split_fn<'a, V, F>(f: F) -> SplitFn<'a, V>
+pub fn mk_val_fn<'a, V, F>(f: F) -> ValFn<'a, V>
 where
     V: Serializable,
     F: Fn(u32, V) -> Option<(u32, V)> + 'a,
@@ -212,7 +211,7 @@ fn remove_lt_internal<V>(
     alloc: &mut NodeAlloc,
     loc: MetadataBlock,
     key: u32,
-    split_fn: &SplitFn<V>,
+    split_fn: &ValFn<V>,
 ) -> Result<RecurseResult>
 where
     V: Serializable,
@@ -241,7 +240,7 @@ fn remove_lt_leaf<V>(
     alloc: &mut NodeAlloc,
     loc: MetadataBlock,
     key: u32,
-    split_fn: &SplitFn<V>,
+    split_fn: &ValFn<V>,
 ) -> Result<RecurseResult>
 where
     V: Serializable,
@@ -276,7 +275,7 @@ pub fn remove_lt_recurse<LeafV>(
     alloc: &mut NodeAlloc,
     loc: MetadataBlock,
     key: u32,
-    split_fn: &SplitFn<LeafV>,
+    split_fn: &ValFn<LeafV>,
 ) -> Result<RecurseResult>
 where
     LeafV: Serializable,
@@ -292,7 +291,7 @@ pub fn remove_lt<LeafV>(
     alloc: &mut NodeAlloc,
     root: MetadataBlock,
     key: u32,
-    split_fn: &SplitFn<LeafV>,
+    split_fn: &ValFn<LeafV>,
 ) -> Result<MetadataBlock>
 where
     LeafV: Serializable,
@@ -309,7 +308,7 @@ fn remove_geq_internal<V>(
     alloc: &mut NodeAlloc,
     loc: MetadataBlock,
     key: u32,
-    split_fn: &SplitFn<V>,
+    split_fn: &ValFn<V>,
 ) -> Result<RecurseResult>
 where
     V: Serializable,
@@ -338,7 +337,7 @@ fn remove_geq_leaf<V>(
     alloc: &mut NodeAlloc,
     loc: MetadataBlock,
     key: u32,
-    split_fn: &SplitFn<V>,
+    split_fn: &ValFn<V>,
 ) -> Result<RecurseResult>
 where
     V: Serializable,
@@ -372,7 +371,7 @@ fn remove_geq_recurse<LeafV>(
     alloc: &mut NodeAlloc,
     loc: MetadataBlock,
     key: u32,
-    split_fn: &SplitFn<LeafV>,
+    split_fn: &ValFn<LeafV>,
 ) -> Result<RecurseResult>
 where
     LeafV: Serializable,
@@ -388,7 +387,7 @@ pub fn remove_geq<LeafV>(
     alloc: &mut NodeAlloc,
     root: MetadataBlock,
     key: u32,
-    split_fn: &SplitFn<LeafV>,
+    split_fn: &ValFn<LeafV>,
 ) -> Result<MetadataBlock>
 where
     LeafV: Serializable,
@@ -496,8 +495,8 @@ fn remove_range_internal<V>(
     loc: MetadataBlock,
     key_begin: u32,
     key_end: u32,
-    split_lt: &SplitFn<V>,
-    split_geq: &SplitFn<V>,
+    split_lt: &ValFn<V>,
+    split_geq: &ValFn<V>,
 ) -> Result<RecurseResult>
 where
     V: Serializable + Copy,
@@ -552,8 +551,8 @@ fn remove_range_leaf<V>(
     loc: MetadataBlock,
     key_begin: u32,
     key_end: u32,
-    split_lt: &SplitFn<V>,
-    split_geq: &SplitFn<V>,
+    split_lt: &ValFn<V>,
+    split_geq: &ValFn<V>,
 ) -> Result<RecurseResult>
 where
     V: Serializable + Copy,
@@ -637,8 +636,8 @@ fn remove_range_recurse<V>(
     loc: MetadataBlock,
     key_begin: u32,
     key_end: u32,
-    split_lt: &SplitFn<V>,
-    split_geq: &SplitFn<V>,
+    split_lt: &ValFn<V>,
+    split_geq: &ValFn<V>,
 ) -> Result<RecurseResult>
 where
     V: Serializable + Copy,
@@ -655,8 +654,8 @@ pub fn remove_range<V>(
     root: MetadataBlock,
     key_begin: u32,
     key_end: u32,
-    split_lt: &SplitFn<V>,
-    split_geq: &SplitFn<V>,
+    split_lt: &ValFn<V>,
+    split_geq: &ValFn<V>,
 ) -> Result<MetadataBlock>
 where
     V: Serializable + Copy,

@@ -88,7 +88,7 @@ pub fn remove<V: Serializable>(
 
 //-------------------------------------------------------------------------
 
-struct NodeInfo {
+pub struct NodeInfo {
     key_min: Option<u32>,
     loc: MetadataBlock,
 }
@@ -105,17 +105,17 @@ impl NodeInfo {
 // middle of an existing entry.  So, like for insert, we have a way of
 // returning more than one new block.  If a pair is returned then the
 // first one corresponds to the idx of the original block.
-enum RecurseResult {
+pub enum RecurseResult {
     Single(NodeInfo),
     Pair(NodeInfo, NodeInfo),
 }
 
 impl RecurseResult {
-    fn single<NV: Serializable>(node: &WNode<NV>) -> Self {
+    pub fn single<NV: Serializable>(node: &WNode<NV>) -> Self {
         RecurseResult::Single(NodeInfo::new(node))
     }
 
-    fn pair<NV: Serializable>(n1: &WNode<NV>, n2: &WNode<NV>) -> Self {
+    pub fn pair<NV: Serializable>(n1: &WNode<NV>, n2: &WNode<NV>) -> Self {
         RecurseResult::Pair(NodeInfo::new(n1), NodeInfo::new(n2))
     }
 }
@@ -163,8 +163,8 @@ fn node_insert_result(
             key_min: Some(new_key),
             loc,
         }) => {
-            node.keys.set(idx, &new_key);
-            node.values.set(idx, &loc);
+            node.keys.set(idx, new_key);
+            node.values.set(idx, loc);
             Ok(RecurseResult::single(node))
         }
         Pair(left, right) => {
@@ -368,7 +368,7 @@ where
 
     Ok(RecurseResult::single(&node))
 }
-pub fn remove_geq_recurse<LeafV>(
+fn remove_geq_recurse<LeafV>(
     alloc: &mut NodeAlloc,
     loc: MetadataBlock,
     key: u32,
@@ -410,55 +410,85 @@ enum RangeOp {
     Erase(usize, usize),
 }
 
-// FIXME: running a TrimGeq followed by a TrimLt (no intervening Erase) can result
-// in an extra value.
-
 type RangeProgram = Vec<RangeOp>;
 
-// FIXME: handle recurse
+// Categorises where a given key is to be found.  usizes are indexes into the
+// key array.
+enum KeyLoc {
+    Within(usize),
+    Exact(usize),
+}
+
+// The key must be >= to the first key in the node.
+fn key_search<NV: Serializable>(node: &WNode<NV>, k: u32) -> KeyLoc {
+    let idx = node.keys.bsearch(&k);
+
+    assert!(idx >= 0);
+    let idx = idx as usize;
+
+    if node.keys.get(idx) == k {
+        KeyLoc::Exact(idx)
+    } else {
+        KeyLoc::Within(idx)
+    }
+}
+
 // All indexes in the program are *before* any operations were executed
 fn range_split<NV: Serializable>(node: &WNode<NV>, key_begin: u32, key_end: u32) -> RangeProgram {
+    use KeyLoc::*;
     use RangeOp::*;
-
-    let mut prog = Vec::new();
 
     if node.is_empty() {
         // no entries
-        return prog;
+        return vec![];
     }
 
     if key_end <= node.keys.get(0) {
         // remove range is before this node
-        return prog;
+        return vec![];
     }
 
-    let mut b_idx = node.keys.bsearch(&key_begin);
-    let mut e_idx = node.keys.bsearch(&key_end);
+    let b = key_search(node, key_begin);
+    let e = key_search(node, key_end);
 
-    if e_idx - b_idx == 1 {
-        prog.push(Recurse(b_idx as usize));
-        return prog;
+    match (b, e) {
+        // Recurse special cases:
+        (Exact(idx1), Within(idx2)) if idx1 == idx2 => {
+            vec![Recurse(idx1)]
+        }
+        (Within(idx1), Within(idx2)) if idx1 == idx2 => {
+            vec![Recurse(idx1)]
+        }
+        (Within(idx1), Exact(idx2)) if (idx2 - idx1) == 1 => {
+            vec![Recurse(idx1)]
+        }
+
+        // General cases:
+        (Exact(idx1), Exact(idx2)) => {
+            vec![Erase(idx1, idx2)]
+        }
+        (Exact(idx1), Within(idx2)) => {
+            if idx2 == idx1 {
+                vec![TrimGeq(idx1)]
+            } else {
+                vec![Erase(idx1, idx2), TrimLt(idx2)]
+            }
+        }
+        (Within(idx1), Exact(idx2)) => {
+            if idx2 - idx1 == 1 {
+                vec![TrimGeq(idx1)]
+            } else {
+                vec![TrimGeq(idx1), Erase(idx1 + 1, idx2)]
+            }
+        }
+        (Within(idx1), Within(idx2)) => {
+            if idx2 - idx1 == 1 {
+                vec![TrimGeq(idx1), TrimLt(idx2)]
+            } else {
+                vec![TrimGeq(idx1), Erase(idx1 + 1, idx2), TrimLt(idx2)]
+            }
+        }
     }
-
-    if b_idx >= 0 && node.keys.get(b_idx as usize) < key_begin {
-        prog.push(TrimGeq(b_idx as usize));
-    }
-
-    b_idx += 1;
-
-    if e_idx < 0 {
-        e_idx = 0;
-    }
-
-    if b_idx < e_idx {
-        prog.push(Erase(b_idx as usize, e_idx as usize));
-    }
-
-    if node.keys.get(e_idx as usize) < key_end {
-        prog.push(TrimLt(e_idx as usize));
-    }
-
-    prog
 }
 
 fn remove_range_internal<V>(
@@ -499,12 +529,12 @@ where
                 let idx = idx - delta;
 
                 let res = remove_lt_recurse(alloc, node.values.get(idx), key_end, split_lt)?;
-                node_insert_result(alloc, &mut node, idx, &res);
+                node_insert_result(alloc, &mut node, idx, &res)?;
             }
             TrimGeq(idx) => {
                 let idx = idx - delta;
                 let res = remove_geq_recurse(alloc, node.values.get(idx), key_begin, split_geq)?;
-                node_insert_result(alloc, &mut node, idx, &res);
+                node_insert_result(alloc, &mut node, idx, &res)?;
             }
             Erase(idx_b, idx_e) => {
                 let idx_b = idx_b - delta;
@@ -558,6 +588,7 @@ where
                         return Ok(RecurseResult::single(&node));
                     }
                     (Some((k1, v1)), Some((k2, v2))) => {
+                        eprintln!("k1 = {:?}, k2 = {:?}", k1, k2);
                         node.overwrite_at(idx, k1, &v1);
                         return ensure_space(alloc, &mut node, idx, |node, idx| {
                             node.insert_at(idx + 1, k2, &v2)
@@ -601,7 +632,7 @@ where
     Ok(RecurseResult::single(&node))
 }
 
-pub fn remove_range_recurse<V>(
+fn remove_range_recurse<V>(
     alloc: &mut NodeAlloc,
     loc: MetadataBlock,
     key_begin: u32,

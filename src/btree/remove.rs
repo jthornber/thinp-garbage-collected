@@ -402,14 +402,14 @@ where
 
 // All usizes are indexes
 // FIXME: Trim ops should hold the key they're trimming against too
-enum RangeOp {
+enum NodeOp {
     Recurse(usize),
     TrimLt(usize),
     TrimGeq(usize),
     Erase(usize, usize),
 }
 
-type RangeProgram = Vec<RangeOp>;
+type NodeProgram = Vec<NodeOp>;
 
 // Categorises where a given key is to be found.  usizes are indexes into the
 // key array.
@@ -433,9 +433,9 @@ fn key_search<NV: Serializable>(node: &WNode<NV>, k: u32) -> KeyLoc {
 }
 
 // All indexes in the program are *before* any operations were executed
-fn range_split<NV: Serializable>(node: &WNode<NV>, key_begin: u32, key_end: u32) -> RangeProgram {
+fn range_split<NV: Serializable>(node: &WNode<NV>, key_begin: u32, key_end: u32) -> NodeProgram {
     use KeyLoc::*;
-    use RangeOp::*;
+    use NodeOp::*;
 
     if node.is_empty() {
         // no entries
@@ -501,7 +501,7 @@ fn remove_range_internal<V>(
 where
     V: Serializable + Copy,
 {
-    use RangeOp::*;
+    use NodeOp::*;
 
     let mut node = alloc.shadow::<MetadataBlock>(loc)?;
     let prog = range_split(&node, key_begin, key_end);
@@ -557,7 +557,7 @@ fn remove_range_leaf<V>(
 where
     V: Serializable + Copy,
 {
-    use RangeOp::*;
+    use NodeOp::*;
 
     let mut node = alloc.shadow::<V>(loc)?;
     let prog = range_split(&node, key_begin, key_end);

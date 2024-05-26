@@ -144,6 +144,7 @@ pub fn ensure_space<NV: Serializable, M: FnOnce(&mut WNode<NV>, usize)>(
         Ok(RecurseResult::single(left))
     }
 }
+
 // Call this when recursing back up the spine
 fn node_insert_result(
     alloc: &mut NodeAlloc,
@@ -190,20 +191,34 @@ where
     Box::new(f)
 }
 
-enum SplitOp {
-    Noop,
-    SplitAndShift(usize),
-    Shift(usize),
+// All usizes are indexes
+// FIXME: Trim ops should hold the key they're trimming against too
+enum NodeOp {
+    Recurse(usize),
+    TrimLt(usize),
+    TrimGeq(usize),
+    Erase(usize, usize),
 }
 
-// This works for both lt_ and geq_, the direction of 'shift' just changes.
-fn split_op<V: Serializable>(node: &WNode<V>, key: u32) -> SplitOp {
-    use SplitOp::*;
+type NodeProgram = Vec<NodeOp>;
+
+fn lt_prog<V: Serializable>(node: &WNode<V>, key: u32) -> NodeProgram {
+    use NodeOp::*;
+
+    if node.nr_entries.get() == 0 {
+        return vec![];
+    }
 
     match node.keys.bsearch(&key) {
-        idx if idx < 0 => Noop,
-        idx if node.keys.get(idx as usize) == key => Shift(idx as usize),
-        idx => SplitAndShift(idx as usize),
+        idx if idx < 0 => {
+            vec![]
+        }
+        idx if node.keys.get(idx as usize) == key => {
+            vec![Erase(0, idx as usize)]
+        }
+        idx => {
+            vec![Erase(0, idx as usize), TrimLt(idx as usize)]
+        }
     }
 }
 
@@ -216,20 +231,31 @@ fn remove_lt_internal<V>(
 where
     V: Serializable,
 {
-    use SplitOp::*;
+    use NodeOp::*;
 
     let mut node = alloc.shadow::<MetadataBlock>(loc)?;
-    match split_op(&node, key) {
-        Noop => {}
-        SplitAndShift(idx) => {
-            let res = remove_lt_recurse(alloc, node.values.get(idx), key, split_fn)?;
-            node_insert_result(alloc, &mut node, idx, &res)?;
+    let prog = lt_prog(&node, key);
 
-            // remove_lt cannot cause a Pair result, so shift here is safe.
-            node.shift_left_no_return(idx);
-        }
-        Shift(idx) => {
-            node.shift_left_no_return(idx);
+    let mut delta = 0;
+    for op in prog {
+        match op {
+            Recurse(_) => {
+                panic!("unexpected recurse");
+            }
+            TrimLt(idx) => {
+                let idx = idx - delta;
+                let res = remove_lt_recurse(alloc, node.values.get(idx), key, split_fn)?;
+
+                // remove_lt cannot cause a Pair result, so we don't need to preserve the result
+                node_insert_result(alloc, &mut node, idx, &res)?;
+            }
+            TrimGeq(_) => {
+                panic!("unexpected trim geq");
+            }
+            Erase(idx_b, idx_e) => {
+                node.erase(idx_b - delta, idx_e - delta);
+                delta += idx_e - idx_b;
+            }
         }
     }
 
@@ -245,13 +271,18 @@ fn remove_lt_leaf<V>(
 where
     V: Serializable,
 {
-    use SplitOp::*;
+    use NodeOp::*;
 
     let mut node = alloc.shadow::<V>(loc)?;
-    match split_op(&node, key) {
-        Noop => {}
-        SplitAndShift(idx) => {
-            match split_fn(node.keys.get(idx), node.values.get(idx)) {
+    let prog = lt_prog(&node, key);
+
+    let mut delta = 0;
+    for op in prog {
+        match op {
+            Recurse(_) => {
+                panic!("unexpected recurse");
+            }
+            TrimLt(idx) => match split_fn(node.keys.get(idx), node.values.get(idx)) {
                 None => {
                     node.keys.remove_at(idx);
                     node.values.remove_at(idx);
@@ -260,11 +291,14 @@ where
                     node.keys.set(idx, &new_key);
                     node.values.set(idx, &new_value);
                 }
+            },
+            TrimGeq(_) => {
+                panic!("unexpected trim geq");
             }
-            node.shift_left_no_return(idx);
-        }
-        Shift(idx) => {
-            node.shift_left_no_return(idx);
+            Erase(idx_b, idx_e) => {
+                node.erase(idx_b - delta, idx_e - delta);
+                delta += idx_e - idx_b;
+            }
         }
     }
 
@@ -304,6 +338,32 @@ where
 
 //-------------------------------------------------------------------------
 
+fn geq_prog<V: Serializable>(node: &WNode<V>, key: u32) -> NodeProgram {
+    use NodeOp::*;
+
+    let nr_entries = node.nr_entries.get() as usize;
+    if nr_entries == 0 {
+        return vec![];
+    }
+
+    match node.keys.bsearch(&key) {
+        idx if idx < 0 => {
+            vec![Erase(0, node.nr_entries.get() as usize)]
+        }
+        idx if node.keys.get(idx as usize) == key => {
+            vec![Erase(idx as usize, nr_entries)]
+        }
+        idx => {
+            let idx = idx as usize;
+            if idx + 1 < nr_entries {
+                vec![TrimGeq(idx), Erase(idx + 1, nr_entries)]
+            } else {
+                vec![TrimGeq(idx)]
+            }
+        }
+    }
+}
+
 fn remove_geq_internal<V>(
     alloc: &mut NodeAlloc,
     loc: MetadataBlock,
@@ -313,20 +373,31 @@ fn remove_geq_internal<V>(
 where
     V: Serializable,
 {
-    use SplitOp::*;
+    use NodeOp::*;
 
     let mut node = alloc.shadow::<MetadataBlock>(loc)?;
-    match split_op(&node, key) {
-        Noop => {}
-        SplitAndShift(idx) => {
-            let res = remove_geq_recurse(alloc, node.values.get(idx), key, split_fn)?;
-            node_insert_result(alloc, &mut node, idx, &res)?;
+    let prog = geq_prog(&node, key);
 
-            // remove_geq() cannot cause a Pair result, so remove_from here is safe.
-            node.remove_from(idx + 1);
-        }
-        Shift(idx) => {
-            node.remove_from(idx);
+    let mut delta = 0;
+    for op in prog {
+        match op {
+            Recurse(_) => {
+                panic!("unexpected recurse");
+            }
+            TrimLt(_) => {
+                panic!("unexpected thim lt");
+            }
+            TrimGeq(idx) => {
+                let idx = idx - delta;
+                let res = remove_geq_recurse(alloc, node.values.get(idx), key, split_fn)?;
+
+                // remove_geq cannot cause a Pair result, so this can't split node.
+                node_insert_result(alloc, &mut node, idx, &res)?;
+            }
+            Erase(idx_b, idx_e) => {
+                node.erase(idx_b - delta, idx_e - delta);
+                delta += idx_e - idx_b;
+            }
         }
     }
 
@@ -342,13 +413,21 @@ fn remove_geq_leaf<V>(
 where
     V: Serializable,
 {
-    use SplitOp::*;
+    use NodeOp::*;
 
     let mut node = alloc.shadow::<V>(loc)?;
-    match split_op(&node, key) {
-        Noop => {}
-        SplitAndShift(idx) => {
-            match split_fn(node.keys.get(idx), node.values.get(idx)) {
+    let prog = geq_prog(&node, key);
+
+    let mut delta = 0;
+    for op in prog {
+        match op {
+            Recurse(_) => {
+                panic!("unexpected recurse");
+            }
+            TrimLt(_) => {
+                panic!("unexpected trim lt");
+            }
+            TrimGeq(idx) => match split_fn(node.keys.get(idx), node.values.get(idx)) {
                 None => {
                     node.keys.remove_at(idx);
                     node.values.remove_at(idx);
@@ -357,16 +436,17 @@ where
                     node.keys.set(idx, &new_key);
                     node.values.set(idx, &new_value);
                 }
+            },
+            Erase(idx_b, idx_e) => {
+                node.erase(idx_b - delta, idx_e - delta);
+                delta += idx_e - idx_b;
             }
-            node.remove_from(idx + 1);
-        }
-        Shift(idx) => {
-            node.remove_from(idx);
         }
     }
 
     Ok(RecurseResult::single(&node))
 }
+
 fn remove_geq_recurse<LeafV>(
     alloc: &mut NodeAlloc,
     loc: MetadataBlock,
@@ -399,17 +479,6 @@ where
 }
 
 //-------------------------------------------------------------------------
-
-// All usizes are indexes
-// FIXME: Trim ops should hold the key they're trimming against too
-enum NodeOp {
-    Recurse(usize),
-    TrimLt(usize),
-    TrimGeq(usize),
-    Erase(usize, usize),
-}
-
-type NodeProgram = Vec<NodeOp>;
 
 // Categorises where a given key is to be found.  usizes are indexes into the
 // key array.
@@ -536,9 +605,7 @@ where
                 node_insert_result(alloc, &mut node, idx, &res)?;
             }
             Erase(idx_b, idx_e) => {
-                let idx_b = idx_b - delta;
-                let idx_e = idx_e - delta;
-                node.erase(idx_b, idx_e);
+                node.erase(idx_b - delta, idx_e - delta);
                 delta += idx_e - idx_b;
             }
         }
@@ -620,9 +687,7 @@ where
                 }
             }
             Erase(idx_b, idx_e) => {
-                let idx_b = idx_b - delta;
-                let idx_e = idx_e - delta;
-                node.erase(idx_b, idx_e);
+                node.erase(idx_b - delta, idx_e - delta);
                 delta += idx_e - idx_b;
             }
         }

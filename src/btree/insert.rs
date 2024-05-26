@@ -19,29 +19,6 @@ fn min_key(alloc: &mut NodeAlloc, loc: MetadataBlock) -> Result<u32> {
     Ok(node.keys.get(0))
 }
 
-pub fn redistribute2<NV: Serializable>(left: &mut WNode<NV>, right: &mut WNode<NV>) {
-    let nr_left = left.nr_entries.get() as usize;
-    let nr_right = right.nr_entries.get() as usize;
-    let total = nr_left + nr_right;
-    let target_left = total / 2;
-
-    match nr_left.cmp(&target_left) {
-        std::cmp::Ordering::Less => {
-            // Move entries from right to left
-            let nr_move = target_left - nr_left;
-            let (keys, values) = right.shift_left(nr_move);
-            left.append_many(&keys, &values);
-        }
-        std::cmp::Ordering::Greater => {
-            // Move entries from left to right
-            let nr_move = nr_left - target_left;
-            let (keys, values) = left.remove_right(nr_move);
-            right.prepend_many(&keys, &values);
-        }
-        std::cmp::Ordering::Equal => { /* do nothing */ }
-    }
-}
-
 fn split_into_two<NV: Serializable>(
     alloc: &mut NodeAlloc,
     mut left: WNode<NV>,

@@ -10,7 +10,6 @@ use crate::packed_array::*;
 //-------------------------------------------------------------------------
 
 pub const NODE_HEADER_SIZE: usize = 16;
-pub const SPACE_THRESHOLD: usize = 8;
 
 #[derive(Eq, PartialEq)]
 pub enum BTreeFlags {

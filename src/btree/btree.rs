@@ -391,7 +391,6 @@ impl<V: Serializable> BTree<V> {
         let mut last = None;
         for i in 0..node.nr_entries.get() {
             let k = node.keys.get(i as usize);
-            eprintln!("k = {}", k);
             ensure!(k >= key_min);
 
             if let Some(key_max) = key_max {

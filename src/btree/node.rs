@@ -49,17 +49,24 @@ pub trait NodeBaseRead<V: Serializable> {
     fn get_entries(&self, b_idx: usize, e_idx: usize) -> (Vec<u32>, Vec<V>);
 
     // FIXME: lose these
-    fn is_full(&self) -> bool;
     fn max_entries() -> usize;
     fn is_leaf(&self) -> bool;
 }
 
+// FIXME: rename SpaceOutcome?
+pub enum NodeInsertOutcome {
+    Success,
+    NoSpace,
+}
+
 pub trait NodeBaseWrite<V: Serializable>: NodeBaseRead<V> {
-    fn overwrite(&mut self, idx: usize, k: u32, value: &V);
-    fn insert(&mut self, idx: usize, k: u32, value: &V);
-    fn prepend(&mut self, keys: &[u32], values: &[V]);
-    fn append(&mut self, keys: &[u32], values: &[V]);
+    fn overwrite(&mut self, idx: usize, k: u32, value: &V) -> NodeInsertOutcome;
+    fn insert(&mut self, idx: usize, k: u32, value: &V) -> NodeInsertOutcome;
+    fn prepend(&mut self, keys: &[u32], values: &[V]) -> NodeInsertOutcome;
+    fn append(&mut self, keys: &[u32], values: &[V]) -> NodeInsertOutcome;
     fn erase(&mut self, b_idx: usize, e_idx: usize);
+
+    // fn redistribute2(&mut self, rhs: &mut Self);
 
     // FIXME: inconsistent naming in the next two
     fn shift_left(&mut self, count: usize) -> (Vec<u32>, Vec<V>) {
@@ -166,6 +173,10 @@ impl<V: Serializable, Data: Readable> Node<V, Data> {
             values,
         }
     }
+
+    pub fn has_space(&self, count: usize) -> bool {
+        self.nr_entries.get() as usize + count <= Self::max_entries()
+    }
 }
 
 impl<V: Serializable, Data: Readable> NodeBaseRead<V> for Node<V, Data> {
@@ -186,10 +197,6 @@ impl<V: Serializable, Data: Readable> NodeBaseRead<V> for Node<V, Data> {
         self.nr_entries() == 0
     }
 
-    fn is_full(&self) -> bool {
-        self.nr_entries() == Self::max_entries()
-    }
-
     fn get_entries(&self, b_idx: usize, e_idx: usize) -> (Vec<u32>, Vec<V>) {
         (
             self.keys.get_many(b_idx, e_idx),
@@ -199,28 +206,43 @@ impl<V: Serializable, Data: Readable> NodeBaseRead<V> for Node<V, Data> {
 }
 
 impl<V: Serializable, Data: Writeable> NodeBaseWrite<V> for Node<V, Data> {
-    fn overwrite(&mut self, idx: usize, k: u32, value: &V) {
+    fn overwrite(&mut self, idx: usize, k: u32, value: &V) -> NodeInsertOutcome {
         self.keys.set(idx, &k);
         self.values.set(idx, value);
+        NodeInsertOutcome::Success
     }
 
-    fn insert(&mut self, idx: usize, key: u32, value: &V) {
-        self.keys.insert_at(idx, &key);
-        self.values.insert_at(idx, value);
-        self.nr_entries.inc(1);
+    fn insert(&mut self, idx: usize, key: u32, value: &V) -> NodeInsertOutcome {
+        if self.has_space(1) {
+            self.keys.insert_at(idx, &key);
+            self.values.insert_at(idx, value);
+            self.nr_entries.inc(1);
+            NodeInsertOutcome::Success
+        } else {
+            NodeInsertOutcome::NoSpace
+        }
     }
 
-    fn prepend(&mut self, keys: &[u32], values: &[V]) {
-        assert!(keys.len() == values.len());
-        self.keys.prepend_many(keys);
-        self.values.prepend_many(values);
-        self.nr_entries.inc(keys.len() as u32);
+    fn prepend(&mut self, keys: &[u32], values: &[V]) -> NodeInsertOutcome {
+        if self.has_space(keys.len()) {
+            self.keys.prepend_many(keys);
+            self.values.prepend_many(values);
+            self.nr_entries.inc(keys.len() as u32);
+            NodeInsertOutcome::Success
+        } else {
+            NodeInsertOutcome::NoSpace
+        }
     }
 
-    fn append(&mut self, keys: &[u32], values: &[V]) {
-        self.keys.append_many(keys);
-        self.values.append_many(values);
-        self.nr_entries.inc(keys.len() as u32);
+    fn append(&mut self, keys: &[u32], values: &[V]) -> NodeInsertOutcome {
+        if self.has_space(keys.len()) {
+            self.keys.append_many(keys);
+            self.values.append_many(values);
+            self.nr_entries.inc(keys.len() as u32);
+            NodeInsertOutcome::Success
+        } else {
+            NodeInsertOutcome::NoSpace
+        }
     }
 
     fn erase(&mut self, idx_b: usize, idx_e: usize) {

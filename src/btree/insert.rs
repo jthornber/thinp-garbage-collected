@@ -54,8 +54,9 @@ fn insert_into_leaf<V: Serializable>(
         })
     } else if node.keys.get(idx as usize) == key {
         // overwrite
-        node.values.set(idx as usize, value);
-        Ok(NodeResult::single(&node))
+        ensure_space(alloc, &mut node, idx as usize, |node, idx| {
+            node.overwrite(idx, key, value)
+        })
     } else {
         ensure_space(alloc, &mut node, idx as usize, |node, idx| {
             node.insert(idx + 1, key, value)

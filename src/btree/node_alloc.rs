@@ -60,27 +60,29 @@ pub fn redistribute2<NV: Serializable>(left: &mut WNode<NV>, right: &mut WNode<N
 }
 
 // FIXME: common code with insert
-pub fn ensure_space<NV: Serializable, M: FnOnce(&mut WNode<NV>, usize)>(
+pub fn ensure_space<NV: Serializable, M: Fn(&mut WNode<NV>, usize) -> NodeInsertOutcome>(
     alloc: &mut NodeAlloc,
     left: &mut WNode<NV>,
     idx: usize,
     mutator: M,
 ) -> Result<NodeResult> {
-    if left.is_full() {
-        let right_block = alloc.new_block()?;
-        let mut right = init_node(right_block.clone(), left.is_leaf())?;
-        redistribute2(left, &mut right);
+    use NodeInsertOutcome::*;
 
-        if idx < left.nr_entries() {
-            mutator(left, idx);
-        } else {
-            mutator(&mut right, idx - left.nr_entries());
+    match mutator(left, idx) {
+        Success => Ok(NodeResult::single(left)),
+        NoSpace => {
+            let right_block = alloc.new_block()?;
+            let mut right = init_node(right_block.clone(), left.is_leaf())?;
+            redistribute2(left, &mut right);
+
+            if idx < left.nr_entries() {
+                mutator(left, idx);
+            } else {
+                mutator(&mut right, idx - left.nr_entries());
+            }
+
+            Ok(NodeResult::pair(left, &right))
         }
-
-        Ok(NodeResult::pair(left, &right))
-    } else {
-        mutator(left, idx);
-        Ok(NodeResult::single(left))
     }
 }
 

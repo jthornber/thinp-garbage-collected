@@ -90,6 +90,14 @@ impl<S: Serializable, Data: Readable> PArray<S, Data> {
         S::unpack(&mut data.r()).unwrap()
     }
 
+    pub fn get_checked(&self, idx: usize) -> Option<S> {
+        if idx >= self.nr_entries {
+            None
+        } else {
+            Some(self.get(idx))
+        }
+    }
+
     pub fn get_many(&self, b_idx: usize, e_idx: usize) -> Vec<S> {
         let mut result = Vec::with_capacity(e_idx - b_idx);
         for i in b_idx..e_idx {

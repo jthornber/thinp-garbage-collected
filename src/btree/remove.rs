@@ -4,6 +4,7 @@ use anyhow::Result;
 use crate::block_cache::*;
 use crate::btree::node::*;
 use crate::btree::node_alloc::*;
+use crate::btree::simple_node::*;
 use crate::packed_array::*;
 
 //-------------------------------------------------------------------------

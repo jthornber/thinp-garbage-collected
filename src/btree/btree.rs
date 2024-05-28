@@ -9,6 +9,7 @@ use crate::btree::insert;
 use crate::btree::node::*;
 use crate::btree::node_alloc::*;
 use crate::btree::remove;
+use crate::btree::simple_node::*;
 use crate::byte_types::*;
 use crate::packed_array::*;
 use crate::transaction_manager::*;

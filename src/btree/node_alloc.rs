@@ -4,6 +4,7 @@ use std::sync::Arc;
 use crate::block_cache::*;
 use crate::block_kinds::*;
 use crate::btree::node::*;
+use crate::btree::simple_node::*;
 use crate::byte_types::*;
 use crate::packed_array::*;
 use crate::transaction_manager::*;

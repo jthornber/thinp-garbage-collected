@@ -12,7 +12,7 @@ fn insert_into_internal<V: Serializable>(
     loc: MetadataBlock,
     key: u32,
     value: &V,
-) -> Result<RecurseResult> {
+) -> Result<NodeResult> {
     let mut node = alloc.shadow::<MetadataBlock>(loc)?;
     let mut idx = node.keys.bsearch(&key);
     if idx < 0 {
@@ -39,7 +39,7 @@ fn insert_into_leaf<V: Serializable>(
     block: MetadataBlock,
     key: u32,
     value: &V,
-) -> Result<RecurseResult> {
+) -> Result<NodeResult> {
     let mut node = alloc.shadow::<V>(block)?;
     let idx = node.keys.bsearch(&key);
 
@@ -54,7 +54,7 @@ fn insert_into_leaf<V: Serializable>(
     } else if node.keys.get(idx as usize) == key {
         // overwrite
         node.values.set(idx as usize, value);
-        Ok(RecurseResult::single(&node))
+        Ok(NodeResult::single(&node))
     } else {
         ensure_space(alloc, &mut node, idx as usize, |node, idx| {
             node.insert_at(idx + 1, key, value)
@@ -67,7 +67,7 @@ fn insert_recursive<V: Serializable>(
     block: MetadataBlock,
     key: u32,
     value: &V,
-) -> Result<RecurseResult> {
+) -> Result<NodeResult> {
     if alloc.is_internal(block)? {
         insert_into_internal::<V>(alloc, block, key, value)
     } else {
@@ -82,7 +82,7 @@ pub fn insert<V: Serializable>(
     key: u32,
     value: &V,
 ) -> Result<MetadataBlock> {
-    use RecurseResult::*;
+    use NodeResult::*;
 
     match insert_recursive(alloc, root, key, value)? {
         Single(NodeInfo { loc, .. }) => Ok(loc),

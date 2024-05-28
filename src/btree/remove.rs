@@ -133,7 +133,7 @@ fn remove_lt_internal<V>(
     loc: MetadataBlock,
     key: u32,
     split_fn: &ValFn<V>,
-) -> Result<RecurseResult>
+) -> Result<NodeResult>
 where
     V: Serializable,
 {
@@ -165,7 +165,7 @@ where
         }
     }
 
-    Ok(RecurseResult::single(&node))
+    Ok(NodeResult::single(&node))
 }
 
 fn remove_lt_leaf<V>(
@@ -173,7 +173,7 @@ fn remove_lt_leaf<V>(
     loc: MetadataBlock,
     key: u32,
     split_fn: &ValFn<V>,
-) -> Result<RecurseResult>
+) -> Result<NodeResult>
 where
     V: Serializable,
 {
@@ -208,7 +208,7 @@ where
         }
     }
 
-    Ok(RecurseResult::single(&node))
+    Ok(NodeResult::single(&node))
 }
 
 pub fn remove_lt_recurse<LeafV>(
@@ -216,7 +216,7 @@ pub fn remove_lt_recurse<LeafV>(
     loc: MetadataBlock,
     key: u32,
     split_fn: &ValFn<LeafV>,
-) -> Result<RecurseResult>
+) -> Result<NodeResult>
 where
     LeafV: Serializable,
 {
@@ -237,8 +237,8 @@ where
     LeafV: Serializable,
 {
     match remove_lt_recurse(alloc, root, key, split_fn)? {
-        RecurseResult::Single(NodeInfo { loc, .. }) => Ok(loc),
-        RecurseResult::Pair(_, _) => Err(anyhow!("remove_lt increase nr entries somehow")),
+        NodeResult::Single(NodeInfo { loc, .. }) => Ok(loc),
+        NodeResult::Pair(_, _) => Err(anyhow!("remove_lt increase nr entries somehow")),
     }
 }
 
@@ -275,7 +275,7 @@ fn remove_geq_internal<V>(
     loc: MetadataBlock,
     key: u32,
     split_fn: &ValFn<V>,
-) -> Result<RecurseResult>
+) -> Result<NodeResult>
 where
     V: Serializable,
 {
@@ -307,7 +307,7 @@ where
         }
     }
 
-    Ok(RecurseResult::single(&node))
+    Ok(NodeResult::single(&node))
 }
 
 fn remove_geq_leaf<V>(
@@ -315,7 +315,7 @@ fn remove_geq_leaf<V>(
     loc: MetadataBlock,
     key: u32,
     split_fn: &ValFn<V>,
-) -> Result<RecurseResult>
+) -> Result<NodeResult>
 where
     V: Serializable,
 {
@@ -350,7 +350,7 @@ where
         }
     }
 
-    Ok(RecurseResult::single(&node))
+    Ok(NodeResult::single(&node))
 }
 
 fn remove_geq_recurse<LeafV>(
@@ -358,7 +358,7 @@ fn remove_geq_recurse<LeafV>(
     loc: MetadataBlock,
     key: u32,
     split_fn: &ValFn<LeafV>,
-) -> Result<RecurseResult>
+) -> Result<NodeResult>
 where
     LeafV: Serializable,
 {
@@ -379,8 +379,8 @@ where
     LeafV: Serializable,
 {
     match remove_geq_recurse(alloc, root, key, split_fn)? {
-        RecurseResult::Single(NodeInfo { loc, .. }) => Ok(loc),
-        RecurseResult::Pair(_, _) => Err(anyhow!("remove_geq increased nr of entries")),
+        NodeResult::Single(NodeInfo { loc, .. }) => Ok(loc),
+        NodeResult::Pair(_, _) => Err(anyhow!("remove_geq increased nr of entries")),
     }
 }
 
@@ -472,7 +472,7 @@ fn remove_range_internal<V>(
     key_end: u32,
     split_lt: &ValFn<V>,
     split_geq: &ValFn<V>,
-) -> Result<RecurseResult>
+) -> Result<NodeResult>
 where
     V: Serializable + Copy,
 {
@@ -516,7 +516,7 @@ where
             }
         }
     }
-    Ok(RecurseResult::single(&node))
+    Ok(NodeResult::single(&node))
 }
 
 fn remove_range_leaf<V>(
@@ -526,7 +526,7 @@ fn remove_range_leaf<V>(
     key_end: u32,
     split_lt: &ValFn<V>,
     split_geq: &ValFn<V>,
-) -> Result<RecurseResult>
+) -> Result<NodeResult>
 where
     V: Serializable + Copy,
 {
@@ -549,15 +549,15 @@ where
                 match (split_geq(k, v), split_lt(k, v)) {
                     (None, None) => {
                         node.remove_at(idx);
-                        return Ok(RecurseResult::single(&node));
+                        return Ok(NodeResult::single(&node));
                     }
                     (Some((k, v)), None) => {
                         node.overwrite_at(idx, k, &v);
-                        return Ok(RecurseResult::single(&node));
+                        return Ok(NodeResult::single(&node));
                     }
                     (None, Some((k, v))) => {
                         node.overwrite_at(idx, k, &v);
-                        return Ok(RecurseResult::single(&node));
+                        return Ok(NodeResult::single(&node));
                     }
                     (Some((k1, v1)), Some((k2, v2))) => {
                         eprintln!("k1 = {:?}, k2 = {:?}", k1, k2);
@@ -599,7 +599,7 @@ where
         }
     }
 
-    Ok(RecurseResult::single(&node))
+    Ok(NodeResult::single(&node))
 }
 
 fn remove_range_recurse<V>(
@@ -609,7 +609,7 @@ fn remove_range_recurse<V>(
     key_end: u32,
     split_lt: &ValFn<V>,
     split_geq: &ValFn<V>,
-) -> Result<RecurseResult>
+) -> Result<NodeResult>
 where
     V: Serializable + Copy,
 {
@@ -631,7 +631,7 @@ pub fn remove_range<V>(
 where
     V: Serializable + Copy,
 {
-    use RecurseResult::*;
+    use NodeResult::*;
 
     match remove_range_recurse(alloc, root, key_begin, key_end, split_lt, split_geq)? {
         Single(NodeInfo { loc, .. }) => Ok(loc),

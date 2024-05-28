@@ -47,9 +47,15 @@ pub trait NodeBaseRead<V: Serializable> {
     fn nr_entries(&self) -> usize;
     fn is_empty(&self) -> bool;
     fn get_entries(&self, b_idx: usize, e_idx: usize) -> (Vec<u32>, Vec<V>);
+    fn get_flags(&self) -> BTreeFlags;
 
-    // FIXME: lose these
-    fn is_leaf(&self) -> bool;
+    fn is_internal(&self) -> bool {
+        self.get_flags() == BTreeFlags::Internal
+    }
+
+    fn is_leaf(&self) -> bool {
+        self.get_flags() == BTreeFlags::Leaf
+    }
 }
 
 // FIXME: rename SpaceOutcome?
@@ -90,13 +96,43 @@ pub trait NodeBaseWrite<V: Serializable>: NodeBaseRead<V> {
 
 //-------------------------------------------------------------------------
 
-pub const NODE_HEADER_SIZE: usize = 16;
+// Every node implementation must start with a u32 containing the flags.
+// This lets us descover if it's a leaf node or internal and isntance
+// the appropriate type.
+pub fn read_flags(r: &[u8]) -> Result<BTreeFlags> {
+    use BTreeFlags::*;
+
+    let mut r = &r[BLOCK_HEADER_SIZE..];
+    let flags = r.read_u32::<LittleEndian>()?;
+
+    match flags {
+        0 => Ok(Internal),
+        1 => Ok(Leaf),
+        _ => panic!("bad flags"),
+    }
+}
+
+//-------------------------------------------------------------------------
 
 #[derive(Eq, PartialEq)]
 pub enum BTreeFlags {
     Internal = 0,
     Leaf = 1,
 }
+
+impl From<u32> for BTreeFlags {
+    fn from(value: u32) -> Self {
+        match value {
+            0 => BTreeFlags::Internal,
+            1 => BTreeFlags::Leaf,
+            _ => panic!("Invalid value for BTreeFlags: {}", value),
+        }
+    }
+}
+
+//-------------------------------------------------------------------------
+
+pub const NODE_HEADER_SIZE: usize = 16;
 
 // FIXME: we can pack this more
 pub struct NodeHeader {
@@ -116,20 +152,6 @@ pub fn write_node_header<W: Write>(w: &mut W, hdr: NodeHeader) -> Result<()> {
     w.write_u32::<LittleEndian>(0)?;
 
     Ok(())
-}
-
-// We need to read the flags to know what sort of node to instance.
-pub fn read_flags(r: &[u8]) -> Result<BTreeFlags> {
-    use BTreeFlags::*;
-
-    let mut r = &r[BLOCK_HEADER_SIZE..];
-    let flags = r.read_u32::<LittleEndian>()?;
-
-    match flags {
-        0 => Ok(Internal),
-        1 => Ok(Leaf),
-        _ => panic!("bad flags"),
-    }
 }
 
 //-------------------------------------------------------------------------
@@ -184,10 +206,6 @@ impl<V: Serializable, Data: Readable> Node<V, Data> {
 }
 
 impl<V: Serializable, Data: Readable> NodeBaseRead<V> for Node<V, Data> {
-    fn is_leaf(&self) -> bool {
-        self.flags.get() == BTreeFlags::Leaf as u32
-    }
-
     fn nr_entries(&self) -> usize {
         self.nr_entries.get() as usize
     }
@@ -201,6 +219,10 @@ impl<V: Serializable, Data: Readable> NodeBaseRead<V> for Node<V, Data> {
             self.keys.get_many(b_idx, e_idx),
             self.values.get_many(b_idx, e_idx),
         )
+    }
+
+    fn get_flags(&self) -> BTreeFlags {
+        BTreeFlags::from(self.flags.get())
     }
 }
 

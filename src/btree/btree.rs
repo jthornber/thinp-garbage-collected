@@ -435,7 +435,7 @@ impl<V: Serializable> BTree<V> {
 pub fn btree_refs(data: &ReadProxy, queue: &mut VecDeque<BlockRef>) {
     let node = r_node(data.clone());
 
-    if node.is_leaf() {
+    if read_flags(data.r()).unwrap() == BTreeFlags::Leaf {
         // FIXME: values should be refs, except in the btree unit tests
     } else {
         for i in 0..node.nr_entries.get() {

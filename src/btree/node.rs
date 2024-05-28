@@ -39,7 +39,7 @@ pub struct NodeInfo {
 }
 
 impl NodeInfo {
-    pub fn new<V: Serializable, N: NodeBaseRead<V>>(node: &N) -> Self {
+    pub fn new<V: Serializable, N: NodeR<V>>(node: &N) -> Self {
         let key_min = node.get_key(0);
         let loc = node.loc();
         NodeInfo { key_min, loc }
@@ -56,18 +56,18 @@ pub enum NodeResult {
 }
 
 impl NodeResult {
-    pub fn single<V: Serializable, N: NodeBaseRead<V>>(node: &N) -> Self {
+    pub fn single<V: Serializable, N: NodeR<V>>(node: &N) -> Self {
         NodeResult::Single(NodeInfo::new(node))
     }
 
-    pub fn pair<V: Serializable, N: NodeBaseRead<V>>(n1: &N, n2: &N) -> Self {
+    pub fn pair<V: Serializable, N: NodeR<V>>(n1: &N, n2: &N) -> Self {
         NodeResult::Pair(NodeInfo::new(n1), NodeInfo::new(n2))
     }
 }
 
 //-------------------------------------------------------------------------
 
-pub trait NodeBaseRead<V: Serializable> {
+pub trait NodeR<V: Serializable> {
     fn loc(&self) -> MetadataBlock;
     fn nr_entries(&self) -> usize;
     fn is_empty(&self) -> bool;
@@ -93,7 +93,7 @@ pub enum NodeInsertOutcome {
     NoSpace,
 }
 
-pub trait NodeBaseWrite<V: Serializable>: NodeBaseRead<V> {
+pub trait NodeW<V: Serializable>: NodeR<V> {
     fn overwrite(&mut self, idx: usize, k: u32, value: &V) -> NodeInsertOutcome;
     fn insert(&mut self, idx: usize, k: u32, value: &V) -> NodeInsertOutcome;
     fn prepend(&mut self, keys: &[u32], values: &[V]) -> NodeInsertOutcome;

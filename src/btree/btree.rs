@@ -267,9 +267,9 @@ impl<V: Serializable> BTree<V> {
         Ok(flags == BTreeFlags::Leaf)
     }
 
-    fn read_node<V2: Serializable>(&self, loc: MetadataBlock) -> Result<Node<V2, ReadProxy>> {
+    fn read_node<V2: Serializable>(&self, loc: MetadataBlock) -> Result<SimpleNode<V2, ReadProxy>> {
         let b = self.tm.read(loc, &BNODE_KIND)?;
-        Ok(Node::<V2, ReadProxy>::new(loc, b))
+        Ok(SimpleNode::<V2, ReadProxy>::new(loc, b))
     }
 
     //-------------------------------
@@ -282,7 +282,7 @@ impl<V: Serializable> BTree<V> {
 
             match flags {
                 BTreeFlags::Internal => {
-                    let node = Node::<u32, ReadProxy>::new(block.loc(), block);
+                    let node = SimpleNode::<u32, ReadProxy>::new(block.loc(), block);
 
                     let idx = node.keys.bsearch(&key);
                     if idx < 0 || idx >= node.nr_entries.get() as isize {
@@ -293,7 +293,7 @@ impl<V: Serializable> BTree<V> {
                     block = self.tm.read(child, &BNODE_KIND)?;
                 }
                 BTreeFlags::Leaf => {
-                    let node = Node::<V, ReadProxy>::new(block.loc(), block);
+                    let node = SimpleNode::<V, ReadProxy>::new(block.loc(), block);
 
                     let idx = node.keys.bsearch(&key);
                     if idx < 0 || idx >= node.nr_entries.get() as isize {

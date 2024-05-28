@@ -35,7 +35,7 @@ pub fn write_node_header<W: Write>(w: &mut W, hdr: NodeHeader) -> Result<()> {
 //-------------------------------------------------------------------------
 
 #[allow(dead_code)]
-pub struct Node<V: Serializable, Data: Readable> {
+pub struct SimpleNode<V: Serializable, Data: Readable> {
     // We cache a copy of the loc because the underlying proxy isn't available.
     // This doesn't get written to disk.
     pub loc: u32,
@@ -48,7 +48,7 @@ pub struct Node<V: Serializable, Data: Readable> {
     pub values: PArray<V, Data>,
 }
 
-impl<V: Serializable, Data: Readable> Node<V, Data> {
+impl<V: Serializable, Data: Readable> SimpleNode<V, Data> {
     pub fn new(loc: u32, data: Data) -> Self {
         let (_, data) = data.split_at(BLOCK_HEADER_SIZE);
         let (flags, data) = data.split_at(4);
@@ -83,7 +83,7 @@ impl<V: Serializable, Data: Readable> Node<V, Data> {
     }
 }
 
-impl<V: Serializable, Data: Readable> NodeBaseRead<V> for Node<V, Data> {
+impl<V: Serializable, Data: Readable> NodeR<V> for SimpleNode<V, Data> {
     fn loc(&self) -> MetadataBlock {
         self.loc
     }
@@ -116,7 +116,7 @@ impl<V: Serializable, Data: Readable> NodeBaseRead<V> for Node<V, Data> {
     }
 }
 
-impl<V: Serializable, Data: Writeable> NodeBaseWrite<V> for Node<V, Data> {
+impl<V: Serializable, Data: Writeable> NodeW<V> for SimpleNode<V, Data> {
     fn overwrite(&mut self, idx: usize, k: u32, value: &V) -> NodeInsertOutcome {
         self.keys.set(idx, &k);
         self.values.set(idx, value);
@@ -168,15 +168,15 @@ impl<V: Serializable, Data: Writeable> NodeBaseWrite<V> for Node<V, Data> {
 // FIXME: remove these, I don't think they add much now it's parameterised by V
 // FIXME: replace with a Cow like type that defers shadowing until we really
 // modify the node.
-pub type RNode<V> = Node<V, ReadProxy>;
-pub type WNode<V> = Node<V, WriteProxy>;
+pub type RNode<V> = SimpleNode<V, ReadProxy>;
+pub type WNode<V> = SimpleNode<V, WriteProxy>;
 
 pub fn w_node<V: Serializable>(block: WriteProxy) -> WNode<V> {
-    Node::new(block.loc(), block)
+    SimpleNode::new(block.loc(), block)
 }
 
 pub fn r_node<V: Serializable>(block: ReadProxy) -> RNode<V> {
-    Node::new(block.loc(), block)
+    SimpleNode::new(block.loc(), block)
 }
 
 pub fn init_node<V: Serializable>(mut block: WriteProxy, is_leaf: bool) -> Result<WNode<V>> {

@@ -43,6 +43,47 @@ impl NodeResult {
 
 //-------------------------------------------------------------------------
 
+pub trait NodeBaseRead<V: Serializable> {
+    fn nr_entries(&self) -> usize;
+    fn is_empty(&self) -> bool;
+    fn get_entries(&self, b_idx: usize, e_idx: usize) -> (Vec<u32>, Vec<V>);
+
+    // FIXME: lose these
+    fn is_full(&self) -> bool;
+    fn max_entries() -> usize;
+    fn is_leaf(&self) -> bool;
+}
+
+pub trait NodeBaseWrite<V: Serializable>: NodeBaseRead<V> {
+    fn overwrite(&mut self, idx: usize, k: u32, value: &V);
+    fn insert(&mut self, idx: usize, k: u32, value: &V);
+    fn prepend(&mut self, keys: &[u32], values: &[V]);
+    fn append(&mut self, keys: &[u32], values: &[V]);
+    fn erase(&mut self, b_idx: usize, e_idx: usize);
+
+    // FIXME: inconsistent naming in the next two
+    fn shift_left(&mut self, count: usize) -> (Vec<u32>, Vec<V>) {
+        let r = self.get_entries(0, count);
+        self.erase(0, count);
+        r
+    }
+
+    fn remove_right(&mut self, count: usize) -> (Vec<u32>, Vec<V>) {
+        let e_idx = self.nr_entries();
+        let b_idx = e_idx - count;
+        let r = self.get_entries(b_idx, e_idx);
+        self.erase(b_idx, e_idx);
+        r
+    }
+
+    // FIXME: rename to remove()
+    fn remove_at(&mut self, idx: usize) {
+        self.erase(idx, idx + 1);
+    }
+}
+
+//-------------------------------------------------------------------------
+
 pub const NODE_HEADER_SIZE: usize = 16;
 
 #[derive(Eq, PartialEq)]
@@ -102,11 +143,6 @@ pub struct Node<V: Serializable, Data: Readable> {
 }
 
 impl<V: Serializable, Data: Readable> Node<V, Data> {
-    pub fn max_entries() -> usize {
-        (BLOCK_PAYLOAD_SIZE - NODE_HEADER_SIZE)
-            / (std::mem::size_of::<u32>() + std::mem::size_of::<V>())
-    }
-
     pub fn new(loc: u32, data: Data) -> Self {
         let (_, data) = data.split_at(BLOCK_HEADER_SIZE);
         let (flags, data) = data.split_at(4);
@@ -130,84 +166,64 @@ impl<V: Serializable, Data: Readable> Node<V, Data> {
             values,
         }
     }
+}
 
-    // FIXME: lift this out of node
-    pub fn is_leaf(&self) -> bool {
+impl<V: Serializable, Data: Readable> NodeBaseRead<V> for Node<V, Data> {
+    fn max_entries() -> usize {
+        (BLOCK_PAYLOAD_SIZE - NODE_HEADER_SIZE)
+            / (std::mem::size_of::<u32>() + std::mem::size_of::<V>())
+    }
+
+    fn is_leaf(&self) -> bool {
         self.flags.get() == BTreeFlags::Leaf as u32
     }
 
-    pub fn nr_entries(&self) -> usize {
+    fn nr_entries(&self) -> usize {
         self.nr_entries.get() as usize
     }
 
-    pub fn is_empty(&self) -> bool {
+    fn is_empty(&self) -> bool {
         self.nr_entries() == 0
     }
 
-    pub fn is_full(&self) -> bool {
+    fn is_full(&self) -> bool {
         self.nr_entries() == Self::max_entries()
+    }
+
+    fn get_entries(&self, b_idx: usize, e_idx: usize) -> (Vec<u32>, Vec<V>) {
+        (
+            self.keys.get_many(b_idx, e_idx),
+            self.values.get_many(b_idx, e_idx),
+        )
     }
 }
 
-impl<V: Serializable, Data: Writeable> Node<V, Data> {
-    pub fn overwrite_at(&mut self, idx: usize, k: u32, value: &V) {
+impl<V: Serializable, Data: Writeable> NodeBaseWrite<V> for Node<V, Data> {
+    fn overwrite(&mut self, idx: usize, k: u32, value: &V) {
         self.keys.set(idx, &k);
         self.values.set(idx, value);
     }
 
-    pub fn insert_at(&mut self, idx: usize, key: u32, value: &V) {
+    fn insert(&mut self, idx: usize, key: u32, value: &V) {
         self.keys.insert_at(idx, &key);
         self.values.insert_at(idx, value);
         self.nr_entries.inc(1);
     }
 
-    pub fn remove_at(&mut self, idx: usize) {
-        self.keys.remove_at(idx);
-        self.values.remove_at(idx);
-        self.nr_entries.dec(1);
-    }
-
-    /// Returns (keys, values) for the entries that have been lost
-    pub fn shift_left(&mut self, count: usize) -> (Vec<u32>, Vec<V>) {
-        let keys = self.keys.shift_left(count);
-        let values = self.values.shift_left(count);
-        self.nr_entries.dec(count as u32);
-        (keys, values)
-    }
-
-    pub fn prepend(&mut self, key: u32, value: &V) {
-        self.keys.prepend(&key);
-        self.values.prepend(value);
-        self.nr_entries.inc(1);
-    }
-
-    pub fn prepend_many(&mut self, keys: &[u32], values: &[V]) {
+    fn prepend(&mut self, keys: &[u32], values: &[V]) {
         assert!(keys.len() == values.len());
         self.keys.prepend_many(keys);
         self.values.prepend_many(values);
         self.nr_entries.inc(keys.len() as u32);
     }
 
-    pub fn append(&mut self, key: u32, value: &V) {
-        self.keys.append(&key);
-        self.values.append(value);
-        self.nr_entries.inc(1);
-    }
-
-    pub fn append_many(&mut self, keys: &[u32], values: &[V]) {
+    fn append(&mut self, keys: &[u32], values: &[V]) {
         self.keys.append_many(keys);
         self.values.append_many(values);
         self.nr_entries.inc(keys.len() as u32);
     }
 
-    pub fn remove_right(&mut self, count: usize) -> (Vec<u32>, Vec<V>) {
-        let keys = self.keys.remove_right(count);
-        let values = self.values.remove_right(count);
-        self.nr_entries.dec(count as u32);
-        (keys, values)
-    }
-
-    pub fn erase(&mut self, idx_b: usize, idx_e: usize) {
+    fn erase(&mut self, idx_b: usize, idx_e: usize) {
         self.keys.erase(idx_b, idx_e);
         self.values.erase(idx_b, idx_e);
         self.nr_entries.dec((idx_e - idx_b) as u32);

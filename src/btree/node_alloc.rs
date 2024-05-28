@@ -47,13 +47,13 @@ pub fn redistribute2<NV: Serializable>(left: &mut WNode<NV>, right: &mut WNode<N
             // Move entries from right to left
             let nr_move = target_left - nr_left;
             let (keys, values) = right.shift_left(nr_move);
-            left.append_many(&keys, &values);
+            left.append(&keys, &values);
         }
         std::cmp::Ordering::Greater => {
             // Move entries from left to right
             let nr_move = nr_left - target_left;
             let (keys, values) = left.remove_right(nr_move);
-            right.prepend_many(&keys, &values);
+            right.prepend(&keys, &values);
         }
         std::cmp::Ordering::Equal => { /* do nothing */ }
     }
@@ -112,7 +112,7 @@ pub fn node_insert_result(
             node.values.set(idx, &left.loc);
 
             ensure_space(alloc, node, idx, |node, idx| {
-                node.insert_at(idx + 1, right.key_min.unwrap(), &right.loc)
+                node.insert(idx + 1, right.key_min.unwrap(), &right.loc)
             })
         }
     }

@@ -90,6 +90,14 @@ impl<S: Serializable, Data: Readable> PArray<S, Data> {
         S::unpack(&mut data.r()).unwrap()
     }
 
+    pub fn get_many(&self, b_idx: usize, e_idx: usize) -> Vec<S> {
+        let mut result = Vec::with_capacity(e_idx - b_idx);
+        for i in b_idx..e_idx {
+            result.push(self.get(i));
+        }
+        result
+    }
+
     /// Return the first element of the array, if present
     pub fn first(&self) -> Option<S> {
         match self.nr_entries {

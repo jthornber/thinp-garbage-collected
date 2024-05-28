@@ -552,18 +552,18 @@ where
                         return Ok(NodeResult::single(&node));
                     }
                     (Some((k, v)), None) => {
-                        node.overwrite_at(idx, k, &v);
+                        node.overwrite(idx, k, &v);
                         return Ok(NodeResult::single(&node));
                     }
                     (None, Some((k, v))) => {
-                        node.overwrite_at(idx, k, &v);
+                        node.overwrite(idx, k, &v);
                         return Ok(NodeResult::single(&node));
                     }
                     (Some((k1, v1)), Some((k2, v2))) => {
                         eprintln!("k1 = {:?}, k2 = {:?}", k1, k2);
-                        node.overwrite_at(idx, k1, &v1);
+                        node.overwrite(idx, k1, &v1);
                         return ensure_space(alloc, &mut node, idx, |node, idx| {
-                            node.insert_at(idx + 1, k2, &v2)
+                            node.insert(idx + 1, k2, &v2)
                         });
                     }
                 }
@@ -637,7 +637,7 @@ where
         Single(NodeInfo { loc, .. }) => Ok(loc),
         Pair(left, right) => {
             let mut parent = init_node::<MetadataBlock>(alloc.new_block()?, false)?;
-            parent.append_many(
+            parent.append(
                 &[left.key_min.unwrap(), right.key_min.unwrap()],
                 &[left.loc, right.loc],
             );

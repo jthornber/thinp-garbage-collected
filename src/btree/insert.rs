@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::slice;
 
 use crate::block_cache::*;
 use crate::btree::node::*;
@@ -45,11 +46,11 @@ fn insert_into_leaf<V: Serializable>(
 
     if idx < 0 {
         ensure_space(alloc, &mut node, idx as usize, |node, _idx| {
-            node.prepend(key, value)
+            node.prepend(slice::from_ref(&key), slice::from_ref(value))
         })
     } else if idx as usize >= node.keys.len() {
         ensure_space(alloc, &mut node, idx as usize, |node, _idx| {
-            node.append(key, value)
+            node.append(slice::from_ref(&key), slice::from_ref(value))
         })
     } else if node.keys.get(idx as usize) == key {
         // overwrite
@@ -57,7 +58,7 @@ fn insert_into_leaf<V: Serializable>(
         Ok(NodeResult::single(&node))
     } else {
         ensure_space(alloc, &mut node, idx as usize, |node, idx| {
-            node.insert_at(idx + 1, key, value)
+            node.insert(idx + 1, key, value)
         })
     }
 }
@@ -88,7 +89,7 @@ pub fn insert<V: Serializable>(
         Single(NodeInfo { loc, .. }) => Ok(loc),
         Pair(left, right) => {
             let mut parent = init_node::<MetadataBlock>(alloc.new_block()?, false)?;
-            parent.append_many(
+            parent.append(
                 &[left.key_min.unwrap(), right.key_min.unwrap()],
                 &[left.loc, right.loc],
             );

@@ -49,7 +49,6 @@ pub trait NodeBaseRead<V: Serializable> {
     fn get_entries(&self, b_idx: usize, e_idx: usize) -> (Vec<u32>, Vec<V>);
 
     // FIXME: lose these
-    fn max_entries() -> usize;
     fn is_leaf(&self) -> bool;
 }
 
@@ -174,17 +173,17 @@ impl<V: Serializable, Data: Readable> Node<V, Data> {
         }
     }
 
+    fn max_entries() -> usize {
+        (BLOCK_PAYLOAD_SIZE - NODE_HEADER_SIZE)
+            / (std::mem::size_of::<u32>() + std::mem::size_of::<V>())
+    }
+
     pub fn has_space(&self, count: usize) -> bool {
         self.nr_entries.get() as usize + count <= Self::max_entries()
     }
 }
 
 impl<V: Serializable, Data: Readable> NodeBaseRead<V> for Node<V, Data> {
-    fn max_entries() -> usize {
-        (BLOCK_PAYLOAD_SIZE - NODE_HEADER_SIZE)
-            / (std::mem::size_of::<u32>() + std::mem::size_of::<V>())
-    }
-
     fn is_leaf(&self) -> bool {
         self.flags.get() == BTreeFlags::Leaf as u32
     }

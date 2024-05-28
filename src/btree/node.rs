@@ -9,6 +9,40 @@ use crate::packed_array::*;
 
 //-------------------------------------------------------------------------
 
+pub struct NodeInfo {
+    pub key_min: Option<u32>,
+    pub loc: MetadataBlock,
+}
+
+impl NodeInfo {
+    pub fn new<NV: Serializable>(node: &WNode<NV>) -> Self {
+        let key_min = node.keys.first();
+        let loc = node.loc;
+        NodeInfo { key_min, loc }
+    }
+}
+
+// Removing a range can turn one entry into two if the range covers the
+// middle of an existing entry.  So, like for insert, we have a way of
+// returning more than one new block.  If a pair is returned then the
+// first one corresponds to the idx of the original block.
+pub enum NodeResult {
+    Single(NodeInfo),
+    Pair(NodeInfo, NodeInfo),
+}
+
+impl NodeResult {
+    pub fn single<NV: Serializable>(node: &WNode<NV>) -> Self {
+        NodeResult::Single(NodeInfo::new(node))
+    }
+
+    pub fn pair<NV: Serializable>(n1: &WNode<NV>, n2: &WNode<NV>) -> Self {
+        NodeResult::Pair(NodeInfo::new(n1), NodeInfo::new(n2))
+    }
+}
+
+//-------------------------------------------------------------------------
+
 pub const NODE_HEADER_SIZE: usize = 16;
 
 #[derive(Eq, PartialEq)]
@@ -97,28 +131,9 @@ impl<V: Serializable, Data: Readable> Node<V, Data> {
         }
     }
 
+    // FIXME: lift this out of node
     pub fn is_leaf(&self) -> bool {
         self.flags.get() == BTreeFlags::Leaf as u32
-    }
-
-    pub fn first_key(&self) -> Option<u32> {
-        if self.keys.is_empty() {
-            None
-        } else {
-            Some(self.keys.get(0))
-        }
-    }
-
-    pub fn first(&self) -> Option<(u32, V)> {
-        self.keys
-            .first()
-            .and_then(|k| self.values.first().map(|v| (k, v)))
-    }
-
-    pub fn last(&self) -> Option<(u32, V)> {
-        self.keys
-            .last()
-            .and_then(|k| self.values.last().map(|v| (k, v)))
     }
 
     pub fn nr_entries(&self) -> usize {

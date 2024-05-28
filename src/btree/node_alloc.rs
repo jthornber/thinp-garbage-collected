@@ -36,38 +36,6 @@ impl NodeAlloc {
 
 //-------------------------------------------------------------------------
 
-pub struct NodeInfo {
-    pub key_min: Option<u32>,
-    pub loc: MetadataBlock,
-}
-
-impl NodeInfo {
-    pub fn new<NV: Serializable>(node: &WNode<NV>) -> Self {
-        let key_min = node.keys.first();
-        let loc = node.loc;
-        NodeInfo { key_min, loc }
-    }
-}
-
-// Removing a range can turn one entry into two if the range covers the
-// middle of an existing entry.  So, like for insert, we have a way of
-// returning more than one new block.  If a pair is returned then the
-// first one corresponds to the idx of the original block.
-pub enum NodeResult {
-    Single(NodeInfo),
-    Pair(NodeInfo, NodeInfo),
-}
-
-impl NodeResult {
-    pub fn single<NV: Serializable>(node: &WNode<NV>) -> Self {
-        NodeResult::Single(NodeInfo::new(node))
-    }
-
-    pub fn pair<NV: Serializable>(n1: &WNode<NV>, n2: &WNode<NV>) -> Self {
-        NodeResult::Pair(NodeInfo::new(n1), NodeInfo::new(n2))
-    }
-}
-
 pub fn redistribute2<NV: Serializable>(left: &mut WNode<NV>, right: &mut WNode<NV>) {
     let nr_left = left.nr_entries.get() as usize;
     let nr_right = right.nr_entries.get() as usize;

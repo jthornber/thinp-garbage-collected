@@ -175,13 +175,6 @@ impl<V: Serializable, Data: Writeable> Node<V, Data> {
         (keys, values)
     }
 
-    // Variant of shift_left() that doesn't return the dropped values
-    pub fn shift_left_no_return(&mut self, count: usize) {
-        self.keys.shift_left_no_return(count);
-        self.values.shift_left_no_return(count);
-        self.nr_entries.dec(count as u32);
-    }
-
     pub fn prepend(&mut self, key: u32, value: &V) {
         self.keys.prepend(&key);
         self.values.prepend(value);
@@ -212,12 +205,6 @@ impl<V: Serializable, Data: Writeable> Node<V, Data> {
         let values = self.values.remove_right(count);
         self.nr_entries.dec(count as u32);
         (keys, values)
-    }
-
-    pub fn remove_from(&mut self, idx: usize) {
-        self.keys.remove_from(idx);
-        self.values.remove_from(idx);
-        self.nr_entries.set(idx as u32);
     }
 
     pub fn erase(&mut self, idx_b: usize, idx_e: usize) {

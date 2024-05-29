@@ -7,7 +7,6 @@ use tracing_subscriber::FmtSubscriber;
 use thinp_garbage_collected::block_allocator::*;
 use thinp_garbage_collected::block_cache::*;
 use thinp_garbage_collected::core::*;
-// use thinp_garbage_collected::mtree::*;
 use thinp_garbage_collected::transaction_manager::*;
 
 //-------------------------------------------------------------------------
@@ -27,8 +26,7 @@ fn main() -> Result<()> {
         100,
         SUPERBLOCK_LOCATION,
     )?));
-    let tm = Arc::new(TransactionManager::new(allocator, cache));
-    // let _mappings = MTree::empty_tree(tm, ReferenceContext::ThinId(0))?;
+    let _tm = Arc::new(TransactionManager::new(allocator, cache));
 
     info!("created empty tree");
     Ok(())

@@ -79,12 +79,6 @@ impl<
         self.root
     }
 
-    fn is_leaf(&self, loc: MetadataBlock) -> Result<bool> {
-        let b = self.tm.read(loc, &BNODE_KIND)?;
-        let flags = read_flags(b.r())?;
-        Ok(flags == BTreeFlags::Leaf)
-    }
-
     //-------------------------------
 
     pub fn lookup(&self, key: u32) -> Result<Option<V>> {
@@ -142,14 +136,14 @@ impl<
 
     pub fn remove_geq(&mut self, key: u32, val_fn: &remove::ValFn<V>) -> Result<()> {
         let mut alloc = self.mk_alloc();
-        let new_root = remove::remove_geq::<V, INode, LNode>(&mut alloc, self.root, key, &val_fn)?;
+        let new_root = remove::remove_geq::<V, INode, LNode>(&mut alloc, self.root, key, val_fn)?;
         self.root = new_root;
         Ok(())
     }
 
     pub fn remove_lt(&mut self, key: u32, val_fn: &remove::ValFn<V>) -> Result<()> {
         let mut alloc = self.mk_alloc();
-        let new_root = remove::remove_lt::<V, INode, LNode>(&mut alloc, self.root, key, &val_fn)?;
+        let new_root = remove::remove_lt::<V, INode, LNode>(&mut alloc, self.root, key, val_fn)?;
         self.root = new_root;
         Ok(())
     }

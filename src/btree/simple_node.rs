@@ -203,11 +203,6 @@ impl<V: Serializable, Data: Writeable> NodeW<V, Data> for SimpleNode<V, Data> {
 // FIXME: replace with a Cow like type that defers shadowing until we really
 // modify the node.
 pub type RNode<V> = SimpleNode<V, ReadProxy>;
-pub type WNode<V> = SimpleNode<V, WriteProxy>;
-
-pub fn w_node<V: Serializable>(block: WriteProxy) -> WNode<V> {
-    SimpleNode::new(block.loc(), block)
-}
 
 pub fn r_node<V: Serializable>(block: ReadProxy) -> RNode<V> {
     SimpleNode::new(block.loc(), block)

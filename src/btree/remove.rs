@@ -98,6 +98,7 @@ pub fn remove<
 
 pub type ValFn<'a, V> = Box<dyn Fn(u32, V) -> Option<(u32, V)> + 'a>;
 
+#[allow(dead_code)]
 pub fn mk_val_fn<'a, V, F>(f: F) -> ValFn<'a, V>
 where
     V: Serializable,
@@ -262,14 +263,14 @@ pub fn remove_lt<
 fn geq_prog<V: Serializable, N: NodeW<V, WriteProxy>>(node: &N, key: u32) -> NodeProgram {
     use NodeOp::*;
 
-    let nr_entries = node.nr_entries() as usize;
+    let nr_entries = node.nr_entries();
     if nr_entries == 0 {
         return vec![];
     }
 
     match node.lower_bound(key) {
         idx if idx < 0 => {
-            vec![Erase(0, node.nr_entries() as usize)]
+            vec![Erase(0, node.nr_entries())]
         }
         idx if node.get_key(idx as usize).unwrap() == key => {
             vec![Erase(idx as usize, nr_entries)]

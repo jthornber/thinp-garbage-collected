@@ -4,7 +4,6 @@ use std::sync::Arc;
 use crate::block_cache::*;
 use crate::block_kinds::*;
 use crate::btree::node::*;
-use crate::btree::simple_node::*;
 use crate::byte_types::*;
 use crate::packed_array::*;
 use crate::transaction_manager::*;
@@ -45,8 +44,8 @@ pub fn redistribute2<V: Serializable, Node: NodeW<V, WriteProxy>>(
     left: &mut Node,
     right: &mut Node,
 ) {
-    let nr_left = left.nr_entries() as usize;
-    let nr_right = right.nr_entries() as usize;
+    let nr_left = left.nr_entries();
+    let nr_right = right.nr_entries();
     let total = nr_left + nr_right;
     let target_left = total / 2;
 

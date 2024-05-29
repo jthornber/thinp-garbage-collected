@@ -83,7 +83,11 @@ impl<V: Serializable, Data: Readable> SimpleNode<V, Data> {
     }
 }
 
-impl<V: Serializable, Data: Readable> NodeR<V> for SimpleNode<V, Data> {
+impl<V: Serializable, Data: Readable> NodeR<V, Data> for SimpleNode<V, Data> {
+    fn open(loc: MetadataBlock, data: Data) -> Result<Self> {
+        Ok(Self::new(loc, data))
+    }
+
     fn loc(&self) -> MetadataBlock {
         self.loc
     }
@@ -104,6 +108,10 @@ impl<V: Serializable, Data: Readable> NodeR<V> for SimpleNode<V, Data> {
         self.values.get_checked(idx)
     }
 
+    fn lower_bound(&self, key: u32) -> isize {
+        self.keys.bsearch(&key)
+    }
+
     fn get_entries(&self, b_idx: usize, e_idx: usize) -> (Vec<u32>, Vec<V>) {
         (
             self.keys.get_many(b_idx, e_idx),
@@ -116,7 +124,33 @@ impl<V: Serializable, Data: Readable> NodeR<V> for SimpleNode<V, Data> {
     }
 }
 
-impl<V: Serializable, Data: Writeable> NodeW<V> for SimpleNode<V, Data> {
+impl<V: Serializable, Data: Writeable> NodeW<V, Data> for SimpleNode<V, Data> {
+    fn init(loc: MetadataBlock, mut data: Data, is_leaf: bool) -> Result<()> {
+        // initialise the block
+        let mut w = std::io::Cursor::new(data.rw());
+        let hdr = BlockHeader {
+            loc,
+            kind: BNODE_KIND,
+            sum: 0,
+        };
+        write_block_header(&mut w, &hdr)?;
+
+        write_node_header(
+            &mut w,
+            NodeHeader {
+                flags: if is_leaf {
+                    BTreeFlags::Leaf
+                } else {
+                    BTreeFlags::Internal
+                } as u32,
+                nr_entries: 0,
+                value_size: V::packed_len() as u16,
+            },
+        )?;
+
+        Ok(())
+    }
+
     fn overwrite(&mut self, idx: usize, k: u32, value: &V) -> NodeInsertOutcome {
         self.keys.set(idx, &k);
         self.values.set(idx, value);
@@ -177,34 +211,6 @@ pub fn w_node<V: Serializable>(block: WriteProxy) -> WNode<V> {
 
 pub fn r_node<V: Serializable>(block: ReadProxy) -> RNode<V> {
     SimpleNode::new(block.loc(), block)
-}
-
-pub fn init_node<V: Serializable>(mut block: WriteProxy, is_leaf: bool) -> Result<WNode<V>> {
-    let loc = block.loc();
-
-    // initialise the block
-    let mut w = std::io::Cursor::new(block.rw());
-    let hdr = BlockHeader {
-        loc,
-        kind: BNODE_KIND,
-        sum: 0,
-    };
-    write_block_header(&mut w, &hdr)?;
-
-    write_node_header(
-        &mut w,
-        NodeHeader {
-            flags: if is_leaf {
-                BTreeFlags::Leaf
-            } else {
-                BTreeFlags::Internal
-            } as u32,
-            nr_entries: 0,
-            value_size: V::packed_len() as u16,
-        },
-    )?;
-
-    Ok(w_node(block))
 }
 
 //-------------------------------------------------------------------------

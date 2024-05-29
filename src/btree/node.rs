@@ -2,6 +2,7 @@ use anyhow::Result;
 use byteorder::{LittleEndian, ReadBytesExt};
 
 use crate::block_cache::*;
+use crate::byte_types::*;
 use crate::packed_array::*;
 
 //-------------------------------------------------------------------------
@@ -39,7 +40,7 @@ pub struct NodeInfo {
 }
 
 impl NodeInfo {
-    pub fn new<V: Serializable, N: NodeR<V>>(node: &N) -> Self {
+    pub fn new<V: Serializable, Data: Readable, N: NodeR<V, Data>>(node: &N) -> Self {
         let key_min = node.get_key(0);
         let loc = node.loc();
         NodeInfo { key_min, loc }
@@ -56,23 +57,26 @@ pub enum NodeResult {
 }
 
 impl NodeResult {
-    pub fn single<V: Serializable, N: NodeR<V>>(node: &N) -> Self {
+    pub fn single<V: Serializable, Data: Readable, N: NodeR<V, Data>>(node: &N) -> Self {
         NodeResult::Single(NodeInfo::new(node))
     }
 
-    pub fn pair<V: Serializable, N: NodeR<V>>(n1: &N, n2: &N) -> Self {
+    pub fn pair<V: Serializable, Data: Readable, N: NodeR<V, Data>>(n1: &N, n2: &N) -> Self {
         NodeResult::Pair(NodeInfo::new(n1), NodeInfo::new(n2))
     }
 }
 
 //-------------------------------------------------------------------------
 
-pub trait NodeR<V: Serializable> {
+pub trait NodeR<V: Serializable, Data: Readable>: Sized {
+    fn open(loc: MetadataBlock, data: Data) -> Result<Self>;
+
     fn loc(&self) -> MetadataBlock;
     fn nr_entries(&self) -> usize;
     fn is_empty(&self) -> bool;
     fn get_key(&self, idx: usize) -> Option<u32>;
     fn get_value(&self, idx: usize) -> Option<V>;
+    fn lower_bound(&self, key: u32) -> isize;
 
     // FIXME: make return type Option
     fn get_entries(&self, b_idx: usize, e_idx: usize) -> (Vec<u32>, Vec<V>);
@@ -93,7 +97,10 @@ pub enum NodeInsertOutcome {
     NoSpace,
 }
 
-pub trait NodeW<V: Serializable>: NodeR<V> {
+pub trait NodeW<V: Serializable, Data: Writeable>: NodeR<V, Data> {
+    /// Initialises a fresh, empty node.
+    fn init(loc: MetadataBlock, data: Data, is_leaf: bool) -> Result<()>;
+
     fn overwrite(&mut self, idx: usize, k: u32, value: &V) -> NodeInsertOutcome;
     fn insert(&mut self, idx: usize, k: u32, value: &V) -> NodeInsertOutcome;
     fn prepend(&mut self, keys: &[u32], values: &[V]) -> NodeInsertOutcome;

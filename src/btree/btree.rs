@@ -16,14 +16,22 @@ use crate::transaction_manager::*;
 
 //-------------------------------------------------------------------------
 
-pub struct BTree<V: Serializable> {
+pub struct BTree<
+    V: Serializable + Copy,
+    INode: NodeW<MetadataBlock, WriteProxy>,
+    LNode: NodeW<V, WriteProxy>,
+> {
     tm: Arc<TransactionManager>,
     context: ReferenceContext,
     root: u32,
-    phantom: std::marker::PhantomData<V>,
+    phantom_v: std::marker::PhantomData<V>,
+    phantom_inode: std::marker::PhantomData<INode>,
+    phantom_lnode: std::marker::PhantomData<LNode>,
 }
 
+/*
 struct Frame {
+    is_leaf: bool,
     loc: MetadataBlock,
 
     // Index into the current node
@@ -33,15 +41,24 @@ struct Frame {
     nr_entries: usize,
 }
 
-pub struct Cursor<'a, V: Serializable> {
-    tree: &'a BTree<V>,
+pub struct Cursor<
+    'a,
+    V: Serializable + Copy,
+    INode: NodeW<MetadataBlock, WriteProxy>,
+    LNode: NodeW<V, WriteProxy>,
+> {
+    tree: &'a BTree<V, INode, LNode>,
 
     // Holds pairs of (loc, index, nr_entries)
     stack: Option<Vec<Frame>>,
 }
 
-fn next_<TreeV: Serializable, NV: Serializable>(
-    tree: &BTree<TreeV>,
+fn next_<
+    V: Serializable + Copy,
+    INode: NodeW<MetadataBlock, WriteProxy>,
+    LNode: NodeW<V, WriteProxy>,
+>(
+    tree: &BTree<V, INode, LNode>,
     stack: &mut Vec<Frame>,
 ) -> Result<bool> {
     if stack.is_empty() {
@@ -54,11 +71,12 @@ fn next_<TreeV: Serializable, NV: Serializable>(
     if frame.index >= frame.nr_entries {
         // We need to move to the next node.
         stack.pop();
-        if !next_::<TreeV, MetadataBlock>(tree, stack)? {
+        if !next_::<V, INode, LNode>(tree, stack)? {
             return Ok(false);
         }
 
         let frame = stack.last().unwrap();
+        let node = INode::open(frame.loc,
         let n = tree.read_node::<MetadataBlock>(frame.loc)?;
 
         let loc = n.values.get(frame.index);
@@ -74,8 +92,13 @@ fn next_<TreeV: Serializable, NV: Serializable>(
     Ok(true)
 }
 
-fn prev_<TreeV: Serializable, NV: Serializable>(
-    tree: &BTree<TreeV>,
+fn prev_<
+    TreeV: Serializable + Copy,
+    NV: Serializable,
+    INode: NodeW<MetadataBlock, WriteProxy>,
+    LNode: NodeW<TreeV, WriteProxy>,
+>(
+    tree: &BTree<TreeV, INode, LNode>,
     stack: &mut Vec<Frame>,
 ) -> Result<bool> {
     if stack.is_empty() {
@@ -85,7 +108,7 @@ fn prev_<TreeV: Serializable, NV: Serializable>(
     if frame.index == 0 {
         // We need to move to the previous node.
         stack.pop();
-        if !prev_::<TreeV, MetadataBlock>(tree, stack)? {
+        if !prev_::<TreeV, MetadataBlock, INode, LNode>(tree, stack)? {
             return Ok(false);
         }
         let frame = stack.last().unwrap();
@@ -104,8 +127,14 @@ fn prev_<TreeV: Serializable, NV: Serializable>(
     Ok(true)
 }
 
-impl<'a, V: Serializable> Cursor<'a, V> {
-    fn new(tree: &'a BTree<V>, key: u32) -> Result<Self> {
+impl<
+        'a,
+        V: Serializable + Copy,
+        INode: NodeW<MetadataBlock, WriteProxy>,
+        LNode: NodeW<V, WriteProxy>,
+    > Cursor<'a, V, INode, LNode>
+{
+    fn new(tree: &'a BTree<V, INode, LNode>, key: u32) -> Result<Self> {
         let mut stack = Vec::new();
         let mut loc = tree.root();
 
@@ -218,29 +247,40 @@ impl<'a, V: Serializable> Cursor<'a, V> {
         }
     }
 }
+*/
 
-impl<V: Serializable> BTree<V> {
+impl<
+        V: Serializable + Copy,
+        INode: NodeW<MetadataBlock, WriteProxy>,
+        LNode: NodeW<V, WriteProxy>,
+    > BTree<V, INode, LNode>
+{
     pub fn open_tree(tm: Arc<TransactionManager>, context: ReferenceContext, root: u32) -> Self {
         Self {
             tm,
             context,
             root,
-            phantom: std::marker::PhantomData,
+            phantom_v: std::marker::PhantomData,
+            phantom_inode: std::marker::PhantomData,
+            phantom_lnode: std::marker::PhantomData,
         }
     }
 
     pub fn empty_tree(tm: Arc<TransactionManager>, context: ReferenceContext) -> Result<Self> {
         let root = {
             let root = tm.new_block(context, &BNODE_KIND)?;
-            let root = init_node::<V>(root, true)?;
-            root.loc
+            let loc = root.loc();
+            LNode::init(loc, root, true)?;
+            loc
         };
 
         Ok(Self {
             tm,
             context,
             root,
-            phantom: std::marker::PhantomData,
+            phantom_v: std::marker::PhantomData,
+            phantom_inode: std::marker::PhantomData,
+            phantom_lnode: std::marker::PhantomData,
         })
     }
 
@@ -249,7 +289,9 @@ impl<V: Serializable> BTree<V> {
             tm: self.tm.clone(),
             context,
             root: self.root,
-            phantom: self.phantom,
+            phantom_v: std::marker::PhantomData,
+            phantom_inode: std::marker::PhantomData,
+            phantom_lnode: std::marker::PhantomData,
         }
     }
 
@@ -257,9 +299,11 @@ impl<V: Serializable> BTree<V> {
         self.root
     }
 
-    pub fn cursor(&self, key: u32) -> Result<Cursor<V>> {
+    /*
+    pub fn cursor(&self, key: u32) -> Result<Cursor<V, INode, LNode>> {
         Cursor::new(self, key)
     }
+    */
 
     fn is_leaf(&self, loc: MetadataBlock) -> Result<bool> {
         let b = self.tm.read(loc, &BNODE_KIND)?;
@@ -267,10 +311,12 @@ impl<V: Serializable> BTree<V> {
         Ok(flags == BTreeFlags::Leaf)
     }
 
+    /*
     fn read_node<V2: Serializable>(&self, loc: MetadataBlock) -> Result<SimpleNode<V2, ReadProxy>> {
         let b = self.tm.read(loc, &BNODE_KIND)?;
         Ok(SimpleNode::<V2, ReadProxy>::new(loc, b))
     }
+    */
 
     //-------------------------------
 
@@ -316,30 +362,27 @@ impl<V: Serializable> BTree<V> {
 
     pub fn insert(&mut self, key: u32, value: &V) -> Result<()> {
         let mut alloc = self.mk_alloc();
-        self.root = insert::insert(&mut alloc, self.root, key, value)?;
+        self.root = insert::insert::<V, INode, LNode>(&mut alloc, self.root, key, value)?;
         Ok(())
     }
 
-    pub fn remove(&mut self, key: u32) -> Result<Option<V>> {
+    pub fn remove(&mut self, key: u32) -> Result<()> {
         let mut alloc = self.mk_alloc();
-        if let Some((root, v)) = remove::remove(&mut alloc, self.root, key)? {
-            self.root = root;
-            Ok(Some(v))
-        } else {
-            Ok(None)
-        }
+        let root = remove::remove::<V, INode, LNode>(&mut alloc, self.root, key)?;
+        self.root = root;
+        Ok(())
     }
 
     pub fn remove_geq(&mut self, key: u32, val_fn: &remove::ValFn<V>) -> Result<()> {
         let mut alloc = self.mk_alloc();
-        let new_root = remove::remove_geq(&mut alloc, self.root, key, &val_fn)?;
+        let new_root = remove::remove_geq::<V, INode, LNode>(&mut alloc, self.root, key, &val_fn)?;
         self.root = new_root;
         Ok(())
     }
 
     pub fn remove_lt(&mut self, key: u32, val_fn: &remove::ValFn<V>) -> Result<()> {
         let mut alloc = self.mk_alloc();
-        let new_root = remove::remove_lt(&mut alloc, self.root, key, &val_fn)?;
+        let new_root = remove::remove_lt::<V, INode, LNode>(&mut alloc, self.root, key, &val_fn)?;
         self.root = new_root;
         Ok(())
     }
@@ -355,19 +398,17 @@ impl<V: Serializable> BTree<V> {
         todo!();
     }
 
-    pub fn remove_range<LeafV>(
+    pub fn remove_range(
         &mut self,
         key_begin: u32,
         key_end: u32,
-        val_lt: &remove::ValFn<LeafV>,
-        val_geq: &remove::ValFn<LeafV>,
-    ) -> Result<()>
-    where
-        LeafV: Serializable + Copy,
-    {
+        val_lt: &remove::ValFn<V>,
+        val_geq: &remove::ValFn<V>,
+    ) -> Result<()> {
         let mut alloc = self.mk_alloc();
-        self.root =
-            remove::remove_range(&mut alloc, self.root, key_begin, key_end, val_lt, val_geq)?;
+        self.root = remove::remove_range::<V, INode, LNode>(
+            &mut alloc, self.root, key_begin, key_end, val_lt, val_geq,
+        )?;
         Ok(())
     }
 
@@ -500,13 +541,16 @@ mod test {
         }
     }
 
+    type TestTree =
+        BTree<Value, SimpleNode<MetadataBlock, WriteProxy>, SimpleNode<Value, WriteProxy>>;
+
     #[allow(dead_code)]
     struct Fixture {
         engine: Arc<dyn IoEngine>,
         cache: Arc<MetadataCache>,
         allocator: Arc<Mutex<BlockAllocator>>,
         tm: Arc<TransactionManager>,
-        tree: BTree<Value>,
+        tree: TestTree,
     }
 
     impl Fixture {
@@ -548,7 +592,7 @@ mod test {
             self.tree.insert(key, value)
         }
 
-        fn remove(&mut self, key: u32) -> Result<Option<Value>> {
+        fn remove(&mut self, key: u32) -> Result<()> {
             self.tree.remove(key)
         }
 
@@ -670,9 +714,7 @@ mod test {
 
         for (i, k) in keys.into_iter().enumerate() {
             ensure!(fix.lookup(k).is_some());
-            let mval = fix.remove(k)?;
-            ensure!(mval.is_some());
-            ensure!(mval.unwrap() == mk_value(k * 3));
+            fix.remove(k)?;
             ensure!(fix.lookup(k).is_none());
             if i % 100 == 0 {
                 eprintln!("removed {}", i);
@@ -707,6 +749,7 @@ mod test {
         Ok(())
     }
 
+    /*
     #[test]
     fn empty_cursor() -> Result<()> {
         let mut fix = Fixture::new(16, 1024)?;
@@ -782,6 +825,7 @@ mod test {
 
         Ok(())
     }
+    */
 
     #[test]
     fn remove_geq_empty() -> Result<()> {
@@ -822,15 +866,18 @@ mod test {
         fix.tree.remove_geq(cut, &remove::mk_val_fn(no_split))?;
         ensure!(fix.tree.check()? == cut);
 
-        let mut c = fix.tree.cursor(0)?;
+        // FIXME: use lookup_range() to verify
+        /*
+                let mut c = fix.tree.cursor(0)?;
 
-        // Check all entries are below `cut`
-        for i in 0..cut {
-            let (k, v) = c.get()?.unwrap();
-            ensure!(k == i);
-            ensure!(v.v == i * 3);
-            c.next_entry()?;
-        }
+                // Check all entries are below `cut`
+                for i in 0..cut {
+                    let (k, v) = c.get()?.unwrap();
+                    ensure!(k == i);
+                    ensure!(v.v == i * 3);
+                    c.next_entry()?;
+                }
+        */
 
         Ok(())
     }
@@ -840,15 +887,18 @@ mod test {
         fix.tree.remove_lt(cut, &remove::mk_val_fn(no_split))?;
         ensure!(fix.tree.check()? == count - cut);
 
-        let mut c = fix.tree.cursor(0)?;
+        // FIXME: use lookup_range() to verify
+        /*
+                let mut c = fix.tree.cursor(0)?;
 
-        // Check all entries are above `cut`
-        for i in cut..count {
-            let (k, v) = c.get()?.unwrap();
-            ensure!(k == i);
-            ensure!(v.v == i * 3);
-            c.next_entry()?;
-        }
+                // Check all entries are above `cut`
+                for i in cut..count {
+                    let (k, v) = c.get()?.unwrap();
+                    ensure!(k == i);
+                    ensure!(v.v == i * 3);
+                    c.next_entry()?;
+                }
+        */
 
         Ok(())
     }
@@ -1060,15 +1110,18 @@ mod test {
         )?;
         // fix.tree.remove_lt(range_end, split_high)?;
 
-        let mut c = fix.tree.cursor(0)?;
-        loop {
-            let (k, v) = c.get()?.unwrap();
-            eprintln!("{}: {:?}", k, v);
+        // FIXME: use lookup_range() to verify
+        /*
+                let mut c = fix.tree.cursor(0)?;
+                loop {
+                    let (k, v) = c.get()?.unwrap();
+                    eprintln!("{}: {:?}", k, v);
 
-            if !c.next_entry()? {
-                break;
-            }
-        }
+                    if !c.next_entry()? {
+                        break;
+                    }
+                }
+        */
 
         /*
         ensure!(fix.tree.check()? == 2);

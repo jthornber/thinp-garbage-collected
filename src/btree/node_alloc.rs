@@ -30,16 +30,23 @@ impl NodeAlloc {
         Ok(read_flags(b.r())? == BTreeFlags::Internal)
     }
 
-    pub fn shadow<NV: Serializable>(&mut self, loc: MetadataBlock) -> Result<WNode<NV>> {
-        Ok(w_node(self.tm.shadow(self.context, loc, &BNODE_KIND)?))
+    pub fn shadow<V: Serializable, Node: NodeW<V, WriteProxy>>(
+        &mut self,
+        loc: MetadataBlock,
+    ) -> Result<Node> {
+        let w_proxy = self.tm.shadow(self.context, loc, &BNODE_KIND)?;
+        Node::open(w_proxy.loc(), w_proxy)
     }
 }
 
 //-------------------------------------------------------------------------
 
-pub fn redistribute2<NV: Serializable>(left: &mut WNode<NV>, right: &mut WNode<NV>) {
-    let nr_left = left.nr_entries.get() as usize;
-    let nr_right = right.nr_entries.get() as usize;
+pub fn redistribute2<V: Serializable, Node: NodeW<V, WriteProxy>>(
+    left: &mut Node,
+    right: &mut Node,
+) {
+    let nr_left = left.nr_entries() as usize;
+    let nr_right = right.nr_entries() as usize;
     let total = nr_left + nr_right;
     let target_left = total / 2;
 
@@ -61,9 +68,13 @@ pub fn redistribute2<NV: Serializable>(left: &mut WNode<NV>, right: &mut WNode<N
 }
 
 // FIXME: common code with insert
-pub fn ensure_space<NV: Serializable, M: Fn(&mut WNode<NV>, usize) -> NodeInsertOutcome>(
+pub fn ensure_space<
+    V: Serializable,
+    Node: NodeW<V, WriteProxy>,
+    M: Fn(&mut Node, usize) -> NodeInsertOutcome,
+>(
     alloc: &mut NodeAlloc,
-    left: &mut WNode<NV>,
+    left: &mut Node,
     idx: usize,
     mutator: M,
 ) -> Result<NodeResult> {
@@ -73,7 +84,8 @@ pub fn ensure_space<NV: Serializable, M: Fn(&mut WNode<NV>, usize) -> NodeInsert
         Success => Ok(NodeResult::single(left)),
         NoSpace => {
             let right_block = alloc.new_block()?;
-            let mut right = init_node(right_block.clone(), left.is_leaf())?;
+            Node::init(right_block.loc(), right_block.clone(), left.is_leaf())?;
+            let mut right = Node::open(right_block.loc(), right_block.clone())?;
             redistribute2(left, &mut right);
 
             if idx < left.nr_entries() {
@@ -88,9 +100,9 @@ pub fn ensure_space<NV: Serializable, M: Fn(&mut WNode<NV>, usize) -> NodeInsert
 }
 
 // Call this when recursing back up the spine
-pub fn node_insert_result(
+pub fn node_insert_result<Node: NodeW<MetadataBlock, WriteProxy>>(
     alloc: &mut NodeAlloc,
-    node: &mut WNode<MetadataBlock>,
+    node: &mut Node,
     idx: usize,
     res: &NodeResult,
 ) -> Result<NodeResult> {
@@ -98,22 +110,18 @@ pub fn node_insert_result(
 
     match res {
         Single(NodeInfo { key_min: None, .. }) => {
-            node.keys.remove_at(idx);
-            node.values.remove_at(idx);
+            node.remove_at(idx);
             Ok(NodeResult::single(node))
         }
         Single(NodeInfo {
             key_min: Some(new_key),
             loc,
         }) => {
-            node.keys.set(idx, new_key);
-            node.values.set(idx, loc);
+            node.overwrite(idx, *new_key, loc);
             Ok(NodeResult::single(node))
         }
         Pair(left, right) => {
-            node.keys.set(idx, &left.key_min.unwrap());
-            node.values.set(idx, &left.loc);
-
+            node.overwrite(idx, left.key_min.unwrap(), &left.loc);
             ensure_space(alloc, node, idx, |node, idx| {
                 node.insert(idx + 1, right.key_min.unwrap(), &right.loc)
             })

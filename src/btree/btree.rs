@@ -6,34 +6,34 @@ use crate::block_allocator::BlockRef;
 use crate::block_cache::*;
 use crate::block_kinds::*;
 use crate::btree::insert;
+use crate::btree::lookup;
 use crate::btree::node::*;
 use crate::btree::node_alloc::*;
 use crate::btree::remove;
-use crate::btree::simple_node::*;
 use crate::byte_types::*;
 use crate::packed_array::*;
 use crate::transaction_manager::*;
 
 //-------------------------------------------------------------------------
 
-pub struct BTree<
-    V: Serializable + Copy,
-    INode: NodeW<MetadataBlock, WriteProxy>,
-    LNode: NodeW<V, WriteProxy>,
-> {
+pub struct BTree<V: Serializable + Copy, INodeR, INodeW, LNodeR, LNodeW> {
     tm: Arc<TransactionManager>,
     context: ReferenceContext,
     root: u32,
     phantom_v: std::marker::PhantomData<V>,
-    phantom_inode: std::marker::PhantomData<INode>,
-    phantom_lnode: std::marker::PhantomData<LNode>,
+    phantom_inode_r: std::marker::PhantomData<INodeR>,
+    phantom_inode_w: std::marker::PhantomData<INodeW>,
+    phantom_lnode_r: std::marker::PhantomData<LNodeR>,
+    phantom_lnode_w: std::marker::PhantomData<LNodeW>,
 }
 
 impl<
         V: Serializable + Copy,
-        INode: NodeW<MetadataBlock, WriteProxy>,
-        LNode: NodeW<V, WriteProxy>,
-    > BTree<V, INode, LNode>
+        INodeR: NodeR<MetadataBlock, ReadProxy>,
+        INodeW: NodeW<MetadataBlock, WriteProxy>,
+        LNodeR: NodeR<V, ReadProxy>,
+        LNodeW: NodeW<V, WriteProxy>,
+    > BTree<V, INodeR, INodeW, LNodeR, LNodeW>
 {
     pub fn open_tree(tm: Arc<TransactionManager>, context: ReferenceContext, root: u32) -> Self {
         Self {
@@ -41,8 +41,10 @@ impl<
             context,
             root,
             phantom_v: std::marker::PhantomData,
-            phantom_inode: std::marker::PhantomData,
-            phantom_lnode: std::marker::PhantomData,
+            phantom_inode_r: std::marker::PhantomData,
+            phantom_inode_w: std::marker::PhantomData,
+            phantom_lnode_r: std::marker::PhantomData,
+            phantom_lnode_w: std::marker::PhantomData,
         }
     }
 
@@ -50,7 +52,7 @@ impl<
         let root = {
             let root = tm.new_block(context, &BNODE_KIND)?;
             let loc = root.loc();
-            LNode::init(loc, root, true)?;
+            LNodeW::init(loc, root, true)?;
             loc
         };
 
@@ -59,8 +61,10 @@ impl<
             context,
             root,
             phantom_v: std::marker::PhantomData,
-            phantom_inode: std::marker::PhantomData,
-            phantom_lnode: std::marker::PhantomData,
+            phantom_inode_r: std::marker::PhantomData,
+            phantom_inode_w: std::marker::PhantomData,
+            phantom_lnode_r: std::marker::PhantomData,
+            phantom_lnode_w: std::marker::PhantomData,
         })
     }
 
@@ -70,8 +74,10 @@ impl<
             context,
             root: self.root,
             phantom_v: std::marker::PhantomData,
-            phantom_inode: std::marker::PhantomData,
-            phantom_lnode: std::marker::PhantomData,
+            phantom_inode_r: std::marker::PhantomData,
+            phantom_inode_w: std::marker::PhantomData,
+            phantom_lnode_r: std::marker::PhantomData,
+            phantom_lnode_w: std::marker::PhantomData,
         }
     }
 
@@ -82,39 +88,7 @@ impl<
     //-------------------------------
 
     pub fn lookup(&self, key: u32) -> Result<Option<V>> {
-        let mut block = self.tm.read(self.root, &BNODE_KIND)?;
-
-        loop {
-            let flags = read_flags(block.r())?;
-
-            match flags {
-                BTreeFlags::Internal => {
-                    let node = SimpleNode::<u32, ReadProxy>::new(block.loc(), block);
-
-                    let idx = node.keys.bsearch(&key);
-                    if idx < 0 || idx >= node.nr_entries.get() as isize {
-                        return Ok(None);
-                    }
-
-                    let child = node.values.get(idx as usize);
-                    block = self.tm.read(child, &BNODE_KIND)?;
-                }
-                BTreeFlags::Leaf => {
-                    let node = SimpleNode::<V, ReadProxy>::new(block.loc(), block);
-
-                    let idx = node.keys.bsearch(&key);
-                    if idx < 0 || idx >= node.nr_entries.get() as isize {
-                        return Ok(None);
-                    }
-
-                    return if node.keys.get(idx as usize) == key {
-                        Ok(Some(node.values.get(idx as usize)))
-                    } else {
-                        Ok(None)
-                    };
-                }
-            }
-        }
+        lookup::lookup::<V, INodeR, LNodeR>(&self.tm, self.root, key)
     }
 
     fn mk_alloc(&self) -> NodeAlloc {
@@ -123,27 +97,27 @@ impl<
 
     pub fn insert(&mut self, key: u32, value: &V) -> Result<()> {
         let mut alloc = self.mk_alloc();
-        self.root = insert::insert::<V, INode, LNode>(&mut alloc, self.root, key, value)?;
+        self.root = insert::insert::<V, INodeW, LNodeW>(&mut alloc, self.root, key, value)?;
         Ok(())
     }
 
     pub fn remove(&mut self, key: u32) -> Result<()> {
         let mut alloc = self.mk_alloc();
-        let root = remove::remove::<V, INode, LNode>(&mut alloc, self.root, key)?;
+        let root = remove::remove::<V, INodeW, LNodeW>(&mut alloc, self.root, key)?;
         self.root = root;
         Ok(())
     }
 
     pub fn remove_geq(&mut self, key: u32, val_fn: &remove::ValFn<V>) -> Result<()> {
         let mut alloc = self.mk_alloc();
-        let new_root = remove::remove_geq::<V, INode, LNode>(&mut alloc, self.root, key, val_fn)?;
+        let new_root = remove::remove_geq::<V, INodeW, LNodeW>(&mut alloc, self.root, key, val_fn)?;
         self.root = new_root;
         Ok(())
     }
 
     pub fn remove_lt(&mut self, key: u32, val_fn: &remove::ValFn<V>) -> Result<()> {
         let mut alloc = self.mk_alloc();
-        let new_root = remove::remove_lt::<V, INode, LNode>(&mut alloc, self.root, key, val_fn)?;
+        let new_root = remove::remove_lt::<V, INodeW, LNodeW>(&mut alloc, self.root, key, val_fn)?;
         self.root = new_root;
         Ok(())
     }
@@ -167,7 +141,7 @@ impl<
         val_geq: &remove::ValFn<V>,
     ) -> Result<()> {
         let mut alloc = self.mk_alloc();
-        self.root = remove::remove_range::<V, INode, LNode>(
+        self.root = remove::remove_range::<V, INodeW, LNodeW>(
             &mut alloc, self.root, key_begin, key_end, val_lt, val_geq,
         )?;
         Ok(())
@@ -175,25 +149,15 @@ impl<
 
     //-------------------------------
 
-    fn check_(
-        &self,
-        loc: u32,
+    fn check_keys_<NV: Serializable, Node: NodeR<NV, ReadProxy>>(
+        node: &Node,
         key_min: u32,
         key_max: Option<u32>,
-        seen: &mut BTreeSet<u32>,
-    ) -> Result<u32> {
-        let mut total = 0;
-
-        ensure!(!seen.contains(&loc));
-        seen.insert(loc);
-
-        let block = self.tm.read(loc, &BNODE_KIND).unwrap();
-        let node = r_node(block);
-
+    ) -> Result<()> {
         // check the keys
         let mut last = None;
-        for i in 0..node.nr_entries.get() {
-            let k = node.keys.get(i as usize);
+        for i in 0..node.nr_entries() {
+            let k = node.get_key(i).unwrap();
             ensure!(k >= key_min);
 
             if let Some(key_max) = key_max {
@@ -208,20 +172,46 @@ impl<
             }
             last = Some(k);
         }
+        Ok(())
+    }
 
-        if node.flags.get() == BTreeFlags::Internal as u32 {
-            for i in 0..node.nr_entries.get() {
-                let kmin = node.keys.get(i as usize);
-                let kmax = if i == node.nr_entries.get() - 1 {
-                    None
-                } else {
-                    Some(node.keys.get(i as usize + 1))
-                };
-                let loc = node.values.get(i as usize);
-                total += self.check_(loc, kmin, kmax, seen)?;
+    fn check_(
+        &self,
+        loc: u32,
+        key_min: u32,
+        key_max: Option<u32>,
+        seen: &mut BTreeSet<u32>,
+    ) -> Result<u32> {
+        let mut total = 0;
+
+        ensure!(!seen.contains(&loc));
+        seen.insert(loc);
+
+        let r_proxy = self.tm.read(loc, &BNODE_KIND).unwrap();
+        let flags = read_flags(r_proxy.r())?;
+
+        match flags {
+            BTreeFlags::Internal => {
+                let node = INodeR::open(r_proxy.loc(), r_proxy)?;
+
+                Self::check_keys_(&node, key_min, key_max)?;
+
+                for i in 0..node.nr_entries() {
+                    let kmin = node.get_key(i).unwrap();
+                    let kmax = if i == node.nr_entries() - 1 {
+                        None
+                    } else {
+                        node.get_key(i + 1)
+                    };
+                    let loc = node.get_value(i).unwrap();
+                    total += self.check_(loc, kmin, kmax, seen)?;
+                }
             }
-        } else {
-            total += node.keys.len() as u32;
+            BTreeFlags::Leaf => {
+                let node = LNodeR::open(r_proxy.loc(), r_proxy)?;
+                Self::check_keys_(&node, key_min, key_max)?;
+                total += node.nr_entries() as u32;
+            }
         }
 
         Ok(total)
@@ -235,14 +225,24 @@ impl<
     }
 }
 
-pub fn btree_refs(data: &ReadProxy, queue: &mut VecDeque<BlockRef>) {
-    let node = r_node(data.clone());
+pub fn btree_refs(r_proxy: &ReadProxy, queue: &mut VecDeque<BlockRef>) {
+    let flags = read_flags(r_proxy.r()).expect("couldn't read node");
 
-    if read_flags(data.r()).unwrap() == BTreeFlags::Leaf {
-        // FIXME: values should be refs, except in the btree unit tests
-    } else {
-        for i in 0..node.nr_entries.get() {
-            queue.push_back(BlockRef::Metadata(node.values.get(i as usize)));
+    match flags {
+        BTreeFlags::Internal => {
+            // FIXME: hard coded for now.  No point fixing this until we've switched
+            // to log based transactions.
+            let node = crate::btree::simple_node::SimpleNode::<MetadataBlock, ReadProxy>::open(
+                r_proxy.loc(),
+                r_proxy.clone(),
+            )
+            .unwrap();
+            for i in 0..node.nr_entries.get() {
+                queue.push_back(BlockRef::Metadata(node.values.get(i as usize)));
+            }
+        }
+        BTreeFlags::Leaf => {
+            // FIXME: values should be refs, except in the btree unit tests
         }
     }
 }
@@ -253,6 +253,7 @@ pub fn btree_refs(data: &ReadProxy, queue: &mut VecDeque<BlockRef>) {
 mod test {
     use super::*;
     use crate::block_allocator::*;
+    use crate::btree::simple_node::*;
     use crate::core::*;
     use crate::scope_id;
     use anyhow::{ensure, Result};
@@ -302,8 +303,13 @@ mod test {
         }
     }
 
-    type TestTree =
-        BTree<Value, SimpleNode<MetadataBlock, WriteProxy>, SimpleNode<Value, WriteProxy>>;
+    type TestTree = BTree<
+        Value,
+        SimpleNode<MetadataBlock, ReadProxy>,
+        SimpleNode<MetadataBlock, WriteProxy>,
+        SimpleNode<Value, ReadProxy>,
+        SimpleNode<Value, WriteProxy>,
+    >;
 
     #[allow(dead_code)]
     struct Fixture {

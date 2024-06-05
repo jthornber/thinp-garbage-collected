@@ -108,14 +108,14 @@ impl<
         Ok(())
     }
 
-    pub fn remove_geq(&mut self, key: u32, val_fn: &remove::ValFn<V>) -> Result<()> {
+    pub fn remove_geq(&mut self, key: u32, val_fn: &ValFn<V>) -> Result<()> {
         let mut alloc = self.mk_alloc();
         let new_root = remove::remove_geq::<V, INodeW, LNodeW>(&mut alloc, self.root, key, val_fn)?;
         self.root = new_root;
         Ok(())
     }
 
-    pub fn remove_lt(&mut self, key: u32, val_fn: &remove::ValFn<V>) -> Result<()> {
+    pub fn remove_lt(&mut self, key: u32, val_fn: &ValFn<V>) -> Result<()> {
         let mut alloc = self.mk_alloc();
         let new_root = remove::remove_lt::<V, INodeW, LNodeW>(&mut alloc, self.root, key, val_fn)?;
         self.root = new_root;
@@ -125,8 +125,21 @@ impl<
     //-------------------------------
 
     /// Returns a vec of key, value pairs
-    pub fn lookup_range(&self, _key_low: u32, _key_high: u32) -> Result<Vec<(u32, V)>> {
-        todo!();
+    pub fn lookup_range(
+        &self,
+        key_begin: u32,
+        key_end: u32,
+        select_above: &ValFn<V>,
+        select_below: &ValFn<V>,
+    ) -> Result<Vec<(u32, V)>> {
+        lookup::lookup_range::<V, INodeR, LNodeR>(
+            &self.tm,
+            self.root,
+            key_begin,
+            key_end,
+            select_below,
+            select_above,
+        )
     }
 
     pub fn insert_range(&mut self, _kvs: &[(u32, V)]) -> Result<()> {
@@ -137,8 +150,8 @@ impl<
         &mut self,
         key_begin: u32,
         key_end: u32,
-        val_lt: &remove::ValFn<V>,
-        val_geq: &remove::ValFn<V>,
+        val_lt: &ValFn<V>,
+        val_geq: &ValFn<V>,
     ) -> Result<()> {
         let mut alloc = self.mk_alloc();
         self.root = remove::remove_range::<V, INodeW, LNodeW>(
@@ -157,7 +170,7 @@ impl<
         // check the keys
         let mut last = None;
         for i in 0..node.nr_entries() {
-            let k = node.get_key(i).unwrap();
+            let k = node.get_key(i);
             ensure!(k >= key_min);
 
             if let Some(key_max) = key_max {
@@ -197,13 +210,14 @@ impl<
                 Self::check_keys_(&node, key_min, key_max)?;
 
                 for i in 0..node.nr_entries() {
-                    let kmin = node.get_key(i).unwrap();
+                    let kmin = node.get_key(i);
+                    // FIXME: redundant if, get_key_safe will handle it
                     let kmax = if i == node.nr_entries() - 1 {
                         None
                     } else {
-                        node.get_key(i + 1)
+                        node.get_key_safe(i + 1)
                     };
-                    let loc = node.get_value(i).unwrap();
+                    let loc = node.get_value(i);
                     total += self.check_(loc, kmin, kmax, seen)?;
                 }
             }
@@ -523,7 +537,7 @@ mod test {
 
         let no_split = |k: u32, v: Value| Some((k, v));
 
-        fix.tree.remove_geq(100, &remove::mk_val_fn(no_split))?;
+        fix.tree.remove_geq(100, &mk_val_fn(no_split))?;
         ensure!(fix.tree.check()? == 0);
         Ok(())
     }
@@ -535,7 +549,7 @@ mod test {
 
         let no_split = |k: u32, v: Value| Some((k, v));
 
-        fix.tree.remove_lt(100, &remove::mk_val_fn(no_split))?;
+        fix.tree.remove_lt(100, &mk_val_fn(no_split))?;
         ensure!(fix.tree.check()? == 0);
         Ok(())
     }
@@ -552,7 +566,7 @@ mod test {
 
     fn remove_geq_and_verify(fix: &mut Fixture, cut: u32) -> Result<()> {
         let no_split = |k: u32, v: Value| Some((k, v));
-        fix.tree.remove_geq(cut, &remove::mk_val_fn(no_split))?;
+        fix.tree.remove_geq(cut, &mk_val_fn(no_split))?;
         ensure!(fix.tree.check()? == cut);
 
         // FIXME: use lookup_range() to verify
@@ -573,7 +587,7 @@ mod test {
 
     fn remove_lt_and_verify(fix: &mut Fixture, count: u32, cut: u32) -> Result<()> {
         let no_split = |k: u32, v: Value| Some((k, v));
-        fix.tree.remove_lt(cut, &remove::mk_val_fn(no_split))?;
+        fix.tree.remove_lt(cut, &mk_val_fn(no_split))?;
         ensure!(fix.tree.check()? == count - cut);
 
         // FIXME: use lookup_range() to verify
@@ -665,7 +679,7 @@ mod test {
         };
 
         fix.insert(100, &Value { v: 200, len: 100 })?;
-        fix.tree.remove_geq(150, &remove::mk_val_fn(split))?;
+        fix.tree.remove_geq(150, &mk_val_fn(split))?;
 
         ensure!(fix.tree.check()? == 1);
         ensure!(fix.tree.lookup(100)?.unwrap() == Value { v: 200, len: 50 });
@@ -693,7 +707,7 @@ mod test {
         };
 
         fix.insert(100, &Value { v: 200, len: 100 })?;
-        fix.tree.remove_lt(150, &remove::mk_val_fn(split))?;
+        fix.tree.remove_lt(150, &mk_val_fn(split))?;
 
         ensure!(fix.tree.check()? == 1);
         ensure!(fix.tree.lookup(150)?.unwrap() == Value { v: 200, len: 50 });
@@ -739,8 +753,8 @@ mod test {
         fix.tree.remove_range(
             range_begin,
             range_end,
-            &remove::mk_val_fn(split_high),
-            &remove::mk_val_fn(split_low),
+            &mk_val_fn(split_high),
+            &mk_val_fn(split_low),
         )?;
 
         ensure!(fix.tree.check()? == 2);
@@ -794,8 +808,8 @@ mod test {
         fix.tree.remove_range(
             range_begin,
             range_end,
-            &remove::mk_val_fn(split_low),
-            &remove::mk_val_fn(split_high),
+            &mk_val_fn(split_low),
+            &mk_val_fn(split_high),
         )?;
         // fix.tree.remove_lt(range_end, split_high)?;
 

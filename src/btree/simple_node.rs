@@ -100,11 +100,19 @@ impl<V: Serializable, Data: Readable> NodeR<V, Data> for SimpleNode<V, Data> {
         self.nr_entries() == 0
     }
 
-    fn get_key(&self, idx: usize) -> Option<u32> {
+    fn get_key(&self, idx: usize) -> u32 {
+        self.keys.get(idx)
+    }
+
+    fn get_key_safe(&self, idx: usize) -> Option<u32> {
         self.keys.get_checked(idx)
     }
 
-    fn get_value(&self, idx: usize) -> Option<V> {
+    fn get_value(&self, idx: usize) -> V {
+        self.values.get(idx)
+    }
+
+    fn get_value_safe(&self, idx: usize) -> Option<V> {
         self.values.get_checked(idx)
     }
 

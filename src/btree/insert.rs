@@ -30,7 +30,7 @@ fn insert_into_internal<
     }
 
     let idx = idx as usize;
-    let child_loc = node.get_value(idx).unwrap();
+    let child_loc = node.get_value(idx);
     let res = insert_recursive::<V, INode, LNode>(alloc, child_loc, key, value)?;
     node_insert_result(alloc, &mut node, idx, &res)
 }
@@ -52,7 +52,7 @@ fn insert_into_leaf<V: Serializable, LNode: NodeW<V, WriteProxy>>(
         ensure_space(alloc, &mut node, idx as usize, |node, _idx| {
             node.append(slice::from_ref(&key), slice::from_ref(value))
         })
-    } else if node.get_key(idx as usize).unwrap() == key {
+    } else if node.get_key(idx as usize) == key {
         // overwrite
         ensure_space(alloc, &mut node, idx as usize, |node, idx| {
             node.overwrite(idx, key, value)

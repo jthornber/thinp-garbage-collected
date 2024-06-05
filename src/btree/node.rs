@@ -7,7 +7,7 @@ use crate::packed_array::*;
 
 //-------------------------------------------------------------------------
 
-#[derive(Eq, PartialEq)]
+#[derive(Eq, PartialEq, Clone, Copy)]
 pub enum BTreeFlags {
     Internal = 0,
     Leaf = 1,
@@ -41,7 +41,7 @@ pub struct NodeInfo {
 
 impl NodeInfo {
     pub fn new<V: Serializable, Data: Readable, N: NodeR<V, Data>>(node: &N) -> Self {
-        let key_min = node.get_key(0);
+        let key_min = node.get_key_safe(0);
         let loc = node.loc();
         NodeInfo { key_min, loc }
     }
@@ -74,8 +74,10 @@ pub trait NodeR<V: Serializable, Data: Readable>: Sized {
     fn loc(&self) -> MetadataBlock;
     fn nr_entries(&self) -> usize;
     fn is_empty(&self) -> bool;
-    fn get_key(&self, idx: usize) -> Option<u32>;
-    fn get_value(&self, idx: usize) -> Option<V>;
+    fn get_key(&self, idx: usize) -> u32;
+    fn get_key_safe(&self, idx: usize) -> Option<u32>;
+    fn get_value(&self, idx: usize) -> V;
+    fn get_value_safe(&self, idx: usize) -> Option<V>;
     fn lower_bound(&self, key: u32) -> isize;
 
     // FIXME: make return type Option
@@ -128,6 +130,19 @@ pub trait NodeW<V: Serializable, Data: Writeable>: NodeR<V, Data> {
     fn remove_at(&mut self, idx: usize) {
         self.erase(idx, idx + 1);
     }
+}
+
+//-------------------------------------------------------------------------
+
+pub type ValFn<'a, V> = Box<dyn Fn(u32, V) -> Option<(u32, V)> + 'a>;
+
+#[allow(dead_code)]
+pub fn mk_val_fn<'a, V, F>(f: F) -> ValFn<'a, V>
+where
+    V: Serializable,
+    F: Fn(u32, V) -> Option<(u32, V)> + 'a,
+{
+    Box::new(f)
 }
 
 //-------------------------------------------------------------------------

@@ -30,7 +30,7 @@ fn remove_internal<
 
     let idx = idx as usize;
 
-    let child = node.get_value(idx).unwrap();
+    let child = node.get_value(idx);
     let res = remove_recurse::<V, INode, LNode>(alloc, child, key)?;
     node_insert_result(alloc, &mut node, idx, &res)
 }
@@ -45,7 +45,7 @@ fn remove_leaf<V: Serializable, LNode: NodeW<V, WriteProxy>>(
     let idx = node.lower_bound(key);
     if (idx >= 0) && ((idx as usize) < node.nr_entries()) {
         let idx = idx as usize;
-        if node.get_key(idx).unwrap() == key {
+        if node.get_key(idx) == key {
             node.remove_at(idx);
         }
     }
@@ -96,17 +96,6 @@ pub fn remove<
 
 //-------------------------------------------------------------------------
 
-pub type ValFn<'a, V> = Box<dyn Fn(u32, V) -> Option<(u32, V)> + 'a>;
-
-#[allow(dead_code)]
-pub fn mk_val_fn<'a, V, F>(f: F) -> ValFn<'a, V>
-where
-    V: Serializable,
-    F: Fn(u32, V) -> Option<(u32, V)> + 'a,
-{
-    Box::new(f)
-}
-
 // All usizes are indexes
 // FIXME: Trim ops should hold the key they're trimming against too
 enum NodeOp {
@@ -129,7 +118,7 @@ fn lt_prog<V: Serializable, N: NodeW<V, WriteProxy>>(node: &N, key: u32) -> Node
         idx if idx < 0 => {
             vec![]
         }
-        idx if node.get_key(idx as usize).unwrap() == key => {
+        idx if node.get_key(idx as usize) == key => {
             vec![Erase(0, idx as usize)]
         }
         idx => {
@@ -162,7 +151,7 @@ where
                 let idx = idx - delta;
                 let res = remove_lt_recurse::<V, INode, LNode>(
                     alloc,
-                    node.get_value(idx).unwrap(),
+                    node.get_value(idx),
                     key,
                     split_fn,
                 )?;
@@ -203,8 +192,7 @@ where
             Recurse(_) => {
                 panic!("unexpected recurse");
             }
-            TrimLt(idx) => match split_fn(node.get_key(idx).unwrap(), node.get_value(idx).unwrap())
-            {
+            TrimLt(idx) => match split_fn(node.get_key(idx), node.get_value(idx)) {
                 None => {
                     node.remove_at(idx);
                 }
@@ -272,7 +260,7 @@ fn geq_prog<V: Serializable, N: NodeW<V, WriteProxy>>(node: &N, key: u32) -> Nod
         idx if idx < 0 => {
             vec![Erase(0, node.nr_entries())]
         }
-        idx if node.get_key(idx as usize).unwrap() == key => {
+        idx if node.get_key(idx as usize) == key => {
             vec![Erase(idx as usize, nr_entries)]
         }
         idx => {
@@ -313,7 +301,7 @@ where
                 let idx = idx - delta;
                 let res = remove_geq_recurse::<V, INode, LNode>(
                     alloc,
-                    node.get_value(idx).unwrap(),
+                    node.get_value(idx),
                     key,
                     split_fn,
                 )?;
@@ -354,16 +342,14 @@ where
             TrimLt(_) => {
                 panic!("unexpected trim lt");
             }
-            TrimGeq(idx) => {
-                match split_fn(node.get_key(idx).unwrap(), node.get_value(idx).unwrap()) {
-                    None => {
-                        node.remove_at(idx);
-                    }
-                    Some((new_key, new_value)) => {
-                        node.overwrite(idx, new_key, &new_value);
-                    }
+            TrimGeq(idx) => match split_fn(node.get_key(idx), node.get_value(idx)) {
+                None => {
+                    node.remove_at(idx);
                 }
-            }
+                Some((new_key, new_value)) => {
+                    node.overwrite(idx, new_key, &new_value);
+                }
+            },
             Erase(idx_b, idx_e) => {
                 node.erase(idx_b - delta, idx_e - delta);
                 delta += idx_e - idx_b;
@@ -423,7 +409,7 @@ fn key_search<V: Serializable, N: NodeW<V, WriteProxy>>(node: &N, k: u32) -> Key
     assert!(idx >= 0);
     let idx = idx as usize;
 
-    if node.get_key(idx).unwrap() == k {
+    if node.get_key(idx) == k {
         KeyLoc::Exact(idx)
     } else {
         KeyLoc::Within(idx)
@@ -444,7 +430,7 @@ fn range_split<V: Serializable, N: NodeW<V, WriteProxy>>(
         return vec![];
     }
 
-    if key_end <= node.get_key(0).unwrap() {
+    if key_end <= node.get_key(0) {
         // remove range is before this node
         return vec![];
     }
@@ -516,7 +502,7 @@ where
                 assert!(prog_len == 1);
                 return remove_range_recurse::<V, INode, LNode>(
                     alloc,
-                    node.get_value(idx).unwrap(),
+                    node.get_value(idx),
                     key_begin,
                     key_end,
                     split_lt,
@@ -531,7 +517,7 @@ where
 
                 let res = remove_lt_recurse::<V, INode, LNode>(
                     alloc,
-                    node.get_value(idx).unwrap(),
+                    node.get_value(idx),
                     key_end,
                     split_lt,
                 )?;
@@ -541,7 +527,7 @@ where
                 let idx = idx - delta;
                 let res = remove_geq_recurse::<V, INode, LNode>(
                     alloc,
-                    node.get_value(idx).unwrap(),
+                    node.get_value(idx),
                     key_begin,
                     split_geq,
                 )?;
@@ -578,8 +564,8 @@ fn remove_range_leaf<V: Serializable + Copy, LNode: NodeW<V, WriteProxy>>(
 
                 // This means the range hits the middle of an entry.
                 // So we'll have to split it in two.
-                let k = node.get_key(idx).unwrap();
-                let v = node.get_value(idx).unwrap();
+                let k = node.get_key(idx);
+                let v = node.get_value(idx);
                 match (split_geq(k, v), split_lt(k, v)) {
                     (None, None) => {
                         node.remove_at(idx);
@@ -604,7 +590,7 @@ fn remove_range_leaf<V: Serializable + Copy, LNode: NodeW<V, WriteProxy>>(
             }
             TrimLt(idx) => {
                 let idx = idx - delta;
-                match split_lt(node.get_key(idx).unwrap(), node.get_value(idx).unwrap()) {
+                match split_lt(node.get_key(idx), node.get_value(idx)) {
                     None => {
                         node.remove_at(idx);
                     }
@@ -615,7 +601,7 @@ fn remove_range_leaf<V: Serializable + Copy, LNode: NodeW<V, WriteProxy>>(
             }
             TrimGeq(idx) => {
                 let idx = idx - delta;
-                match split_geq(node.get_key(idx).unwrap(), node.get_value(idx).unwrap()) {
+                match split_geq(node.get_key(idx), node.get_value(idx)) {
                     None => {
                         node.remove_at(idx);
                     }

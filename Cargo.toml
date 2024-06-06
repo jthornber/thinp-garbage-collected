@@ -21,3 +21,6 @@ roaring = "0.10"
 thinp = { git = "https://github.com/jthornber/thin-provisioning-tools.git", branch = "main" }
 tracing = "0.1"
 tracing-subscriber = "0.3"
+
+
+mlua = { version = "0.9.8", features = ["lua54", "vendored"] }

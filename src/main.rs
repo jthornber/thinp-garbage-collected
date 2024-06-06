@@ -1,35 +1,32 @@
-use anyhow::Result;
-use std::sync::{Arc, Mutex};
-use thinp::io_engine::*;
+use mlua::{
+    FromLua, Function, Lua, MetaMethod, Result, UserData, UserDataMethods, Value, Variadic,
+};
+use std::io::{self, Write};
 use tracing::{info, Level};
 use tracing_subscriber::FmtSubscriber;
 
-use thinp_garbage_collected::block_allocator::*;
-use thinp_garbage_collected::block_cache::*;
-use thinp_garbage_collected::core::*;
-use thinp_garbage_collected::transaction_manager::*;
-
 //-------------------------------------------------------------------------
 
+fn repl() -> Result<()> {
+    let lua = Lua::new();
+
+    // Read the Lua REPL script from the file
+    let repl_script = std::fs::read_to_string("lua/repl.lua").expect("Failed to read repl.lua");
+
+    // Load and execute the Lua REPL script
+    lua.load(&repl_script).exec()?;
+
+    Ok(())
+}
+
 fn main() -> Result<()> {
+    // Set up tracing
     let subscriber = FmtSubscriber::builder()
         .with_max_level(Level::TRACE)
         .finish();
 
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
-
-    const SUPERBLOCK_LOCATION: u32 = 0;
-    let engine: Arc<dyn IoEngine> = Arc::new(CoreIoEngine::new(1024));
-    let cache = Arc::new(MetadataCache::new(engine, 16)?);
-    let allocator = Arc::new(Mutex::new(BlockAllocator::new(
-        cache.clone(),
-        100,
-        SUPERBLOCK_LOCATION,
-    )?));
-    let _tm = Arc::new(TransactionManager::new(allocator, cache));
-
-    info!("created empty tree");
-    Ok(())
+    repl()
 }
 
 //-------------------------------------------------------------------------

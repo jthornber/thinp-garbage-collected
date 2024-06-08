@@ -34,6 +34,16 @@ pub fn read_flags(r: &[u8]) -> Result<BTreeFlags> {
 
 //-------------------------------------------------------------------------
 
+pub type SequenceNr = u32;
+
+#[derive(Clone, Eq, PartialEq, PartialOrd, Ord)]
+pub struct NodePtr {
+    pub loc: MetadataBlock,
+    pub seq_nr: SequenceNr,
+}
+
+//-------------------------------------------------------------------------
+
 pub struct NodeInfo {
     pub key_min: Option<u32>,
     pub loc: MetadataBlock,

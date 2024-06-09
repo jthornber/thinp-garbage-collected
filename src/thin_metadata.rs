@@ -10,13 +10,14 @@ use crate::transaction_manager::TransactionManager;
 
 //-------------------------------------------------------------------------
 
-// We use a 4k block size
-type DataBlock = u64;
+// We use a 4k block size for both virtual and physical blocks
+type VBlock = u64;
+type PBlock = u64;
 
 type ThinID = u64;
 
 struct ThinInfo {
-    size: DataBlock,
+    size: VBlock,
     root: MetadataBlock,
 }
 
@@ -30,12 +31,12 @@ struct Pool {
 }
 
 struct Map {
-    data_begin: DataBlock,
-    len: DataBlock,
+    data_begin: PBlock,
+    len: PBlock,
 }
 
 enum LookupResult {
-    Unmapped(DataBlock), // len
+    Unmapped(PBlock), // len
     Mapped(Map),
 }
 
@@ -53,11 +54,11 @@ impl Pool {
         todo!()
     }
 
-    pub fn create_thin(&mut self, _size: DataBlock) -> Result<ThinID> {
+    pub fn create_thin(&mut self, _size: VBlock) -> Result<ThinID> {
         todo!();
     }
 
-    pub fn create_thick(&mut self, _size: DataBlock) -> Result<ThinID> {
+    pub fn create_thick(&mut self, _size: VBlock) -> Result<ThinID> {
         todo!();
     }
 
@@ -89,8 +90,8 @@ impl Pool {
     pub fn get_read_mapping(
         &self,
         _dev: ThinID,
-        _key_begin: DataBlock,
-        _key_end: DataBlock,
+        _key_begin: VBlock,
+        _key_end: VBlock,
     ) -> Result<VecDeque<LookupResult>> {
         todo!();
     }
@@ -98,18 +99,13 @@ impl Pool {
     pub fn get_write_mapping(
         &self,
         _dev: ThinID,
-        _key_begin: DataBlock,
-        _key_end: DataBlock,
+        _key_begin: VBlock,
+        _key_end: VBlock,
     ) -> Result<VecDeque<LookupResult>> {
         todo!();
     }
 
-    pub fn discard(
-        &mut self,
-        _dev: ThinID,
-        _key_begin: DataBlock,
-        _key_end: DataBlock,
-    ) -> Result<()> {
+    pub fn discard(&mut self, _dev: ThinID, _key_begin: VBlock, _key_end: VBlock) -> Result<()> {
         todo!();
     }
 }

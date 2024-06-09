@@ -28,7 +28,7 @@ struct ThinDevice {
 
 #[allow(dead_code)]
 impl Pool {
-    pub fn new<P: AsRef<Path>>(_path: P, _data_block_size: u64, _format: bool) -> Self {
+    pub fn create<P: AsRef<Path>>(dir: P, data_block_size: u64) -> Self {
         todo!();
     }
 
@@ -56,31 +56,7 @@ impl Pool {
         todo!();
     }
 
-    pub fn transation_id(&self) -> u64 {
-        todo!();
-    }
-
-    pub fn set_transaction_id(&mut self, _old_id: u64, _id: u64) -> Result<()> {
-        todo!();
-    }
-
-    pub fn reserve_metadata_snap(&mut self) -> Result<()> {
-        todo!();
-    }
-
-    pub fn release_metadata_snap(&mut self) -> Result<()> {
-        todo!();
-    }
-
-    pub fn get_metadata_snap(&self) -> Result<u64> {
-        todo!();
-    }
-
     pub fn open_thin(&self, _dev: ThinID) -> Result<ThinDevice> {
-        todo!();
-    }
-
-    pub fn changed_this_transaction(&self) -> bool {
         todo!();
     }
 
@@ -97,10 +73,6 @@ impl Pool {
     }
 
     pub fn data_dev_size(&self) -> Result<u64> {
-        todo!();
-    }
-
-    pub fn resize_data_dev(&mut self, _new_size: u64) -> Result<()> {
         todo!();
     }
 
@@ -155,19 +127,7 @@ impl ThinDevice {
         todo!();
     }
 
-    pub fn changed_this_transaction(&self) -> bool {
-        todo!();
-    }
-
-    pub fn aborted_with_changes(&self) -> bool {
-        todo!();
-    }
-
     pub fn highest_mapped(&self) -> Result<Option<u64>> {
-        todo!();
-    }
-
-    pub fn mapping_count(&self) -> Result<u64> {
         todo!();
     }
 }

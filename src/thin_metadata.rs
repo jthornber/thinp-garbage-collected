@@ -1,16 +1,16 @@
 use anyhow::Result;
 use std::collections::{BTreeMap, VecDeque};
+use std::fs::{self, OpenOptions};
 use std::path::Path;
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use crate::block_cache::*;
 use crate::buddy_alloc::*;
+use crate::journal::*;
 use crate::transaction_manager::TransactionManager;
 use crate::types::*;
 
 //-------------------------------------------------------------------------
-
-type ThinID = u64;
 
 struct ThinInfo {
     size: VBlock,
@@ -19,7 +19,7 @@ struct ThinInfo {
 
 #[allow(dead_code)]
 struct Pool {
-    tm: Arc<TransactionManager>,
+    journal: Journal,
     devs: BTreeMap<ThinID, ThinInfo>,
 
     meta_alloc: BuddyAllocator,
@@ -32,14 +32,47 @@ struct Map {
 }
 
 enum Run {
-    Unmapped(PBlock), // len
+    Unmapped(VBlock), // len
     Mapped(Map),
 }
 
 #[allow(dead_code)]
 impl Pool {
-    pub fn create<P: AsRef<Path>>(_dir: P) -> Self {
-        todo!();
+    pub fn create<P: AsRef<Path>>(
+        dir: P,
+        metadata_order: usize,
+        data_order: usize,
+    ) -> Result<Self> {
+        let dir = dir.as_ref();
+
+        // Create directory, failing if it already exists.
+        if dir.exists() {
+            return Err(anyhow::anyhow!("Directory already exists"));
+        }
+        fs::create_dir_all(dir)?;
+
+        // Create the node file in dir, this should have size 4k * 2^metadata_order
+        let node_file_path = dir.join("node_file");
+        let node_file_size = 4096 * (1 << metadata_order);
+        let node_file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(node_file_path)?;
+        node_file.set_len(node_file_size as u64)?;
+
+        // Create journal in dir
+        let journal_file_path = dir.join("journal");
+        let journal = Journal::create(journal_file_path)?;
+
+        // Initialize the buddy allocators
+        let meta_alloc = BuddyAllocator::new(metadata_order);
+        let data_alloc = BuddyAllocator::new(data_order);
+        Ok(Pool {
+            journal,
+            devs: BTreeMap::new(),
+            meta_alloc,
+            data_alloc,
+        })
     }
 
     pub fn open<P: AsRef<Path>>(_dir: P) -> Self {
@@ -51,7 +84,7 @@ impl Pool {
     }
 
     pub fn create_thin(&mut self, _size: VBlock) -> Result<ThinID> {
-        todo!();
+        todo!()
     }
 
     pub fn create_thick(&mut self, _size: VBlock) -> Result<ThinID> {

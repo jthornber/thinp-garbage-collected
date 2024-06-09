@@ -1,62 +1,71 @@
 use anyhow::Result;
+use std::collections::{BTreeMap, VecDeque};
 use std::ops::Range;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
-use crate::block_allocator::BlockAllocator;
 use crate::block_cache::*;
-// use crate::extent_allocator::ExtentAllocator;
+use crate::buddy_alloc::*;
 use crate::transaction_manager::TransactionManager;
 
 //-------------------------------------------------------------------------
 
+// We use a 4k block size
+type DataBlock = u64;
+
 type ThinID = u64;
 
-#[allow(dead_code)]
-struct Pool {
-    // data_extent_allocator: ExtentAllocator,
-    allocator: BlockAllocator, // This manages both metadata and data blocks.
-    cache: Arc<MetadataCache>,
-    tm: Arc<TransactionManager>,
+struct ThinInfo {
+    size: DataBlock,
+    root: MetadataBlock,
 }
 
 #[allow(dead_code)]
-struct ThinDevice {
-    pool: Arc<Mutex<Pool>>,
-    id: ThinID,
+struct Pool {
+    tm: Arc<TransactionManager>,
+    devs: BTreeMap<ThinID, ThinInfo>,
+
+    meta_alloc: BuddyAllocator,
+    data_alloc: BuddyAllocator,
+}
+
+struct Map {
+    data_begin: DataBlock,
+    len: DataBlock,
+}
+
+enum LookupResult {
+    Unmapped(DataBlock), // len
+    Mapped(Map),
 }
 
 #[allow(dead_code)]
 impl Pool {
-    pub fn create<P: AsRef<Path>>(dir: P, data_block_size: u64) -> Self {
+    pub fn create<P: AsRef<Path>>(_dir: P) -> Self {
         todo!();
     }
 
-    pub fn open<P: AsRef<Path>>(_path: P, _data_block_size: u64) -> Self {
+    pub fn open<P: AsRef<Path>>(_dir: P) -> Self {
         todo!();
     }
 
-    pub fn create_thin(&mut self, _dev: ThinID) -> Result<()> {
+    pub fn close(self) -> Result<()> {
+        todo!()
+    }
+
+    pub fn create_thin(&mut self, _size: DataBlock) -> Result<ThinID> {
         todo!();
     }
 
-    pub fn create_snap(&mut self, _dev: ThinID, _origin: ThinID) -> Result<()> {
+    pub fn create_thick(&mut self, _size: DataBlock) -> Result<ThinID> {
+        todo!();
+    }
+
+    pub fn create_snap(&mut self, _origin: ThinID) -> Result<ThinID> {
         todo!();
     }
 
     pub fn delete_thin(&mut self, _dev: ThinID) -> Result<()> {
-        todo!();
-    }
-
-    pub fn commit(&mut self) -> Result<()> {
-        todo!();
-    }
-
-    pub fn abort(&mut self) -> Result<()> {
-        todo!();
-    }
-
-    pub fn open_thin(&self, _dev: ThinID) -> Result<ThinDevice> {
         todo!();
     }
 
@@ -76,58 +85,33 @@ impl Pool {
         todo!();
     }
 
-    pub fn resize_metadata_dev(&mut self, _new_size: u64) -> Result<()> {
+    // FIXME: can we return impl Iterator?
+    pub fn get_read_mapping(
+        &self,
+        _dev: ThinID,
+        _key_begin: DataBlock,
+        _key_end: DataBlock,
+    ) -> Result<VecDeque<LookupResult>> {
+        todo!();
+    }
+
+    pub fn get_write_mapping(
+        &self,
+        _dev: ThinID,
+        _key_begin: DataBlock,
+        _key_end: DataBlock,
+    ) -> Result<VecDeque<LookupResult>> {
+        todo!();
+    }
+
+    pub fn discard(
+        &mut self,
+        _dev: ThinID,
+        _key_begin: DataBlock,
+        _key_end: DataBlock,
+    ) -> Result<()> {
         todo!();
     }
 }
 
-impl Drop for Pool {
-    fn drop(&mut self) {
-        todo!();
-    }
-}
-
-#[allow(dead_code)]
-struct LookupResult {
-    block: u64,
-    shared: bool,
-}
-
-#[allow(dead_code)]
-struct RangeResult {
-    thin_begin: u64,
-    thin_end: u64,
-    pool_begin: u64,
-    maybe_shared: bool,
-}
-
-#[allow(dead_code)]
-impl ThinDevice {
-    pub fn get_id(&self) -> ThinID {
-        todo!();
-    }
-
-    pub fn find_block(&self, _block: u64) -> Result<Option<LookupResult>> {
-        todo!();
-    }
-
-    pub fn find_mapped_range(&self, _search: Range<u64>) -> Result<Option<RangeResult>> {
-        todo!();
-    }
-
-    pub fn alloc_data_block(&mut self) -> Result<u64> {
-        todo!();
-    }
-
-    pub fn insert_data_block(&mut self, _block: u64, _data_block: u64) -> Result<()> {
-        todo!();
-    }
-
-    pub fn remove_range(&mut self, _thin_blocks: Range<u64>) -> Result<()> {
-        todo!();
-    }
-
-    pub fn highest_mapped(&self) -> Result<Option<u64>> {
-        todo!();
-    }
-}
+//-------------------------------------------------------------------------

@@ -14,6 +14,8 @@ use crate::slab::*;
 
 pub type Bytes = Vec<u8>;
 
+// FIXME: we need to journal ops that are not specific to a node.  eg,
+// allocating a data range.
 /// Operations that can be performed on a node.
 #[derive(Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub enum NodeOp {

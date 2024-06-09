@@ -1,18 +1,14 @@
 use anyhow::Result;
 use std::collections::{BTreeMap, VecDeque};
-use std::ops::Range;
 use std::path::Path;
 use std::sync::{Arc, Mutex};
 
 use crate::block_cache::*;
 use crate::buddy_alloc::*;
 use crate::transaction_manager::TransactionManager;
+use crate::types::*;
 
 //-------------------------------------------------------------------------
-
-// We use a 4k block size for both virtual and physical blocks
-type VBlock = u64;
-type PBlock = u64;
 
 type ThinID = u64;
 
@@ -35,7 +31,7 @@ struct Map {
     len: PBlock,
 }
 
-enum LookupResult {
+enum Run {
     Unmapped(PBlock), // len
     Mapped(Map),
 }
@@ -92,7 +88,7 @@ impl Pool {
         _dev: ThinID,
         _key_begin: VBlock,
         _key_end: VBlock,
-    ) -> Result<VecDeque<LookupResult>> {
+    ) -> Result<VecDeque<Run>> {
         todo!();
     }
 
@@ -101,7 +97,7 @@ impl Pool {
         _dev: ThinID,
         _key_begin: VBlock,
         _key_end: VBlock,
-    ) -> Result<VecDeque<LookupResult>> {
+    ) -> Result<VecDeque<Run>> {
         todo!();
     }
 

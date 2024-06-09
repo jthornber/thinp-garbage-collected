@@ -9,6 +9,7 @@ use std::path::Path;
 use crate::block_cache::*;
 use crate::btree::node::*;
 use crate::slab::*;
+use crate::types::*;
 
 //-------------------------------------------------------------------------
 
@@ -18,7 +19,11 @@ pub type Bytes = Vec<u8>;
 // allocating a data range.
 /// Operations that can be performed on a node.
 #[derive(Clone, Eq, PartialEq, PartialOrd, Ord)]
-pub enum NodeOp {
+pub enum Entry {
+    AllocMetadata(VBlock, VBlock), // begin, end
+    AllocData(PBlock, PBlock),     // begin, end
+    FreeMetadata(VBlock, VBlock),  // begin, end
+    FreeData(VBlock, VBlock),      // begin, end
     SetSeq(SequenceNr),            // Only used when rereading output log
     Zero(usize, usize),            // begin, end (including node header)
     Literal(usize, Bytes),         // offset, bytes
@@ -33,6 +38,10 @@ pub enum NodeOp {
 #[derive(Eq, PartialEq, TryFromPrimitive)]
 #[repr(u8)]
 enum Tag {
+    AllocMetadata,
+    AllocData,
+    FreeMetadata,
+    FreeData,
     SetSeq,
     Zero,
     Literal,
@@ -44,11 +53,13 @@ enum Tag {
     Erase,
 }
 
-fn pack_tag(tag: Tag) -> u8 {
-    (tag as u8)
+fn pack_tag<W: Write>(w: &mut W, tag: Tag) -> Result<()> {
+    w.write_u8(tag as u8)?;
+    Ok(())
 }
 
-fn unpack_tag(b: u8) -> Result<Tag> {
+fn unpack_tag<R: Read>(r: &mut R) -> Result<Tag> {
+    let b = r.read_u8()?;
     let tag = Tag::try_from(b)?;
     Ok(tag)
 }
@@ -66,37 +77,65 @@ fn unpack_bytes<R: Read>(r: &mut R) -> Result<Bytes> {
     Ok(buffer)
 }
 
-fn pack_op<W: Write>(w: &mut W, op: &NodeOp) -> Result<()> {
-    use NodeOp::*;
+fn pack_begin_end<W: Write>(w: &mut W, begin: VBlock, end: VBlock) -> Result<()> {
+    w.write_u64::<LittleEndian>(begin)?;
+    w.write_u64::<LittleEndian>(end)?;
+    Ok(())
+}
+
+fn unpack_begin_end<R: Read>(r: &mut R) -> Result<(u64, u64)> {
+    let b = r.read_u64::<LittleEndian>()?;
+    let e = r.read_u64::<LittleEndian>()?;
+    Ok((b, e))
+}
+
+fn pack_op<W: Write>(w: &mut W, op: &Entry) -> Result<()> {
+    use Entry::*;
 
     match op {
+        AllocMetadata(b, e) => {
+            pack_tag(w, Tag::AllocMetadata)?;
+            pack_begin_end(w, *b, *e)?;
+        }
+        AllocData(b, e) => {
+            pack_tag(w, Tag::AllocData)?;
+            pack_begin_end(w, *b, *e)?;
+        }
+        FreeMetadata(b, e) => {
+            pack_tag(w, Tag::FreeMetadata)?;
+            pack_begin_end(w, *b, *e)?;
+        }
+        FreeData(b, e) => {
+            pack_tag(w, Tag::FreeData)?;
+            pack_begin_end(w, *b, *e)?;
+        }
         SetSeq(seq) => {
-            w.write_u8(pack_tag(Tag::SetSeq))?;
+            pack_tag(w, Tag::SetSeq)?;
             w.write_u32::<LittleEndian>(*seq)?;
         }
         Zero(begin, end) => {
-            w.write_u8(pack_tag(Tag::Zero))?;
+            pack_tag(w, Tag::Zero)?;
             w.write_u16::<LittleEndian>(*begin as u16)?;
             w.write_u16::<LittleEndian>(*end as u16)?;
         }
         Literal(offset, bytes) => {
-            w.write_u8(pack_tag(Tag::Literal))?;
+            pack_tag(w, Tag::Literal)?;
             w.write_u16::<LittleEndian>(*offset as u16)?;
             pack_bytes(w, bytes)?;
         }
         Shadow(origin) => {
-            w.write_u8(pack_tag(Tag::Shadow))?;
+            pack_tag(w, Tag::Shadow)?;
             w.write_u32::<LittleEndian>(origin.loc)?;
             w.write_u32::<LittleEndian>(origin.seq_nr)?;
         }
         Overwrite(idx, k, v) => {
-            w.write_u8(pack_tag(Tag::Overwrite))?;
+            pack_tag(w, Tag::Overwrite)?;
             w.write_u16::<LittleEndian>(*idx as u16)?;
             w.write_u32::<LittleEndian>(*k)?;
             pack_bytes(w, v)?;
         }
         Insert(idx, k, v) => {
-            w.write_u8(pack_tag(Tag::Insert))?;
+            pack_tag(w, Tag::Insert)?;
             w.write_u16::<LittleEndian>(*idx as u16)?;
             w.write_u32::<LittleEndian>(*k)?;
             pack_bytes(w, v)?;
@@ -104,7 +143,7 @@ fn pack_op<W: Write>(w: &mut W, op: &NodeOp) -> Result<()> {
         Prepend(keys, values) => {
             assert!(keys.len() == values.len());
 
-            w.write_u8(pack_tag(Tag::Prepend))?;
+            pack_tag(w, Tag::Prepend)?;
             w.write_u16::<LittleEndian>(keys.len() as u16)?;
             for (k, v) in keys.iter().zip(values.iter()) {
                 w.write_u32::<LittleEndian>(*k)?;
@@ -114,8 +153,7 @@ fn pack_op<W: Write>(w: &mut W, op: &NodeOp) -> Result<()> {
         Append(keys, values) => {
             assert!(keys.len() == values.len());
 
-            w.write_u8(pack_tag(Tag::Append))?;
-            w.write_u8(pack_tag(Tag::Prepend))?;
+            pack_tag(w, Tag::Prepend)?;
             w.write_u16::<LittleEndian>(keys.len() as u16)?;
             for (k, v) in keys.iter().zip(values.iter()) {
                 w.write_u32::<LittleEndian>(*k)?;
@@ -123,7 +161,7 @@ fn pack_op<W: Write>(w: &mut W, op: &NodeOp) -> Result<()> {
             }
         }
         Erase(idx_b, idx_e) => {
-            w.write_u8(pack_tag(Tag::Erase))?;
+            pack_tag(w, Tag::Erase)?;
             w.write_u16::<LittleEndian>(*idx_b as u16)?;
             w.write_u16::<LittleEndian>(*idx_e as u16)?;
         }
@@ -132,7 +170,7 @@ fn pack_op<W: Write>(w: &mut W, op: &NodeOp) -> Result<()> {
     Ok(())
 }
 
-fn pack_node_ops<W: Write>(w: &mut W, loc: MetadataBlock, ops: &[NodeOp]) -> Result<()> {
+fn pack_node_ops<W: Write>(w: &mut W, loc: MetadataBlock, ops: &[Entry]) -> Result<()> {
     w.write_u32::<LittleEndian>(loc)?;
     w.write_u16::<LittleEndian>(ops.len() as u16)?;
     for op in ops {
@@ -141,10 +179,26 @@ fn pack_node_ops<W: Write>(w: &mut W, loc: MetadataBlock, ops: &[NodeOp]) -> Res
     Ok(())
 }
 
-fn unpack_op<R: Read>(r: &mut R) -> Result<NodeOp> {
-    use NodeOp::*;
-    let tag = unpack_tag(r.read_u8()?)?;
+fn unpack_op<R: Read>(r: &mut R) -> Result<Entry> {
+    use Entry::*;
+    let tag = unpack_tag(r)?;
     match tag {
+        Tag::AllocMetadata => {
+            let (b, e) = unpack_begin_end(r)?;
+            Ok(AllocMetadata(b, e))
+        }
+        Tag::AllocData => {
+            let (b, e) = unpack_begin_end(r)?;
+            Ok(AllocData(b, e))
+        }
+        Tag::FreeMetadata => {
+            let (b, e) = unpack_begin_end(r)?;
+            Ok(FreeMetadata(b, e))
+        }
+        Tag::FreeData => {
+            let (b, e) = unpack_begin_end(r)?;
+            Ok(FreeData(b, e))
+        }
         Tag::SetSeq => {
             let seq = r.read_u32::<LittleEndian>()?;
             Ok(SetSeq(seq))
@@ -204,7 +258,7 @@ fn unpack_op<R: Read>(r: &mut R) -> Result<NodeOp> {
     }
 }
 
-fn unpack_node_ops<R: Read>(r: &mut R) -> Result<(MetadataBlock, Vec<NodeOp>)> {
+fn unpack_node_ops<R: Read>(r: &mut R) -> Result<(MetadataBlock, Vec<Entry>)> {
     let loc = r.read_u32::<LittleEndian>()?;
     let num_ops = r.read_u16::<LittleEndian>()? as usize;
     let mut ops = Vec::with_capacity(num_ops);
@@ -217,7 +271,7 @@ fn unpack_node_ops<R: Read>(r: &mut R) -> Result<(MetadataBlock, Vec<NodeOp>)> {
 
 pub struct NodeLog {
     slab: SlabFile,
-    nodes: BTreeMap<MetadataBlock, Vec<NodeOp>>,
+    nodes: BTreeMap<MetadataBlock, Vec<Entry>>,
     seqs: BTreeMap<MetadataBlock, SequenceNr>,
 }
 
@@ -256,7 +310,7 @@ impl NodeLog {
 
     /// Node ptr refers to the node before the op, after the op
     /// the seq_nr will be one higher.
-    pub fn add_op(&mut self, n: &NodePtr, op: &NodeOp) -> Result<()> {
+    pub fn add_op(&mut self, n: &NodePtr, op: &Entry) -> Result<()> {
         self.nodes
             .entry(n.loc)
             .and_modify(|ops| ops.push(op.clone()));
@@ -297,7 +351,7 @@ impl NodeLog {
         _loc: MetadataBlock,
         _seq_old: SequenceNr,
         _seq_new: SequenceNr,
-    ) -> Result<Vec<NodeOp>> {
+    ) -> Result<Vec<Entry>> {
         todo!()
     }
 }

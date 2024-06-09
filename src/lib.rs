@@ -16,3 +16,4 @@ pub mod scope_id;
 pub mod slab;
 pub mod thin_metadata;
 pub mod transaction_manager;
+pub mod types;

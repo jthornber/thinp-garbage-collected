@@ -21,18 +21,24 @@ pub type Bytes = Vec<u8>;
 #[derive(Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub enum Entry {
     AllocMetadata(VBlock, VBlock), // begin, end
-    AllocData(PBlock, PBlock),     // begin, end
     FreeMetadata(VBlock, VBlock),  // begin, end
-    FreeData(VBlock, VBlock),      // begin, end
-    SetSeq(SequenceNr),            // Only used when rereading output log
-    Zero(usize, usize),            // begin, end (including node header)
-    Literal(usize, Bytes),         // offset, bytes
-    Shadow(NodePtr),               // origin
-    Overwrite(u32, u32, Bytes),    // idx, k, v
-    Insert(u32, u32, Bytes),       // idx, k, v
-    Prepend(Vec<u32>, Vec<Bytes>), // keys, values
-    Append(Vec<u32>, Vec<Bytes>),  // keys, values
-    Erase(u32, u32),               // idx_b, idx_e
+
+    AllocData(PBlock, PBlock), // begin, end
+    FreeData(VBlock, VBlock),  // begin, end
+
+    NewDev(ThinID, VBlock, MetadataBlock), // id, size, id, root
+    NewRoot(ThinID, MetadataBlock),
+    DelDev(ThinID),
+
+    SetSeq(MetadataBlock, SequenceNr), // Only used when rereading output log
+    Zero(MetadataBlock, usize, usize), // begin, end (including node header)
+    Literal(MetadataBlock, usize, Bytes), // offset, bytes
+    Shadow(MetadataBlock, NodePtr),    // origin
+    Overwrite(MetadataBlock, u32, u32, Bytes), // idx, k, v
+    Insert(MetadataBlock, u32, u32, Bytes), // idx, k, v
+    Prepend(MetadataBlock, Vec<u32>, Vec<Bytes>), // keys, values
+    Append(MetadataBlock, Vec<u32>, Vec<Bytes>), // keys, values
+    Erase(MetadataBlock, u32, u32),    // idx_b, idx_e
 }
 
 #[derive(Eq, PartialEq, TryFromPrimitive)]
@@ -40,8 +46,14 @@ pub enum Entry {
 enum Tag {
     AllocMetadata,
     AllocData,
+
     FreeMetadata,
     FreeData,
+
+    NewDev,
+    NewRoot,
+    DelDev,
+
     SetSeq,
     Zero,
     Literal,
@@ -101,67 +113,92 @@ fn pack_op<W: Write>(w: &mut W, op: &Entry) -> Result<()> {
             pack_tag(w, Tag::AllocData)?;
             pack_begin_end(w, *b, *e)?;
         }
-        FreeMetadata(b, e) => {
-            pack_tag(w, Tag::FreeMetadata)?;
-            pack_begin_end(w, *b, *e)?;
-        }
+
         FreeData(b, e) => {
             pack_tag(w, Tag::FreeData)?;
             pack_begin_end(w, *b, *e)?;
         }
-        SetSeq(seq) => {
+        FreeMetadata(b, e) => {
+            pack_tag(w, Tag::FreeMetadata)?;
+            pack_begin_end(w, *b, *e)?;
+        }
+        NewDev(id, size, root) => {
+            pack_tag(w, Tag::NewDev)?;
+            w.write_u64::<LittleEndian>(*id)?;
+            w.write_u64::<LittleEndian>(*size)?;
+            w.write_u32::<LittleEndian>(*root)?;
+        }
+        NewRoot(id, root) => {
+            pack_tag(w, Tag::NewRoot)?;
+            w.write_u64::<LittleEndian>(*id)?;
+            w.write_u32::<LittleEndian>(*root)?;
+        }
+        DelDev(id) => {
+            pack_tag(w, Tag::DelDev)?;
+            w.write_u64::<LittleEndian>(*id)?;
+        }
+        SetSeq(loc, seq) => {
             pack_tag(w, Tag::SetSeq)?;
+            w.write_u32::<LittleEndian>(*loc)?;
             w.write_u32::<LittleEndian>(*seq)?;
         }
-        Zero(begin, end) => {
+        Zero(loc, begin, end) => {
             pack_tag(w, Tag::Zero)?;
+            w.write_u32::<LittleEndian>(*loc)?;
             w.write_u16::<LittleEndian>(*begin as u16)?;
             w.write_u16::<LittleEndian>(*end as u16)?;
         }
-        Literal(offset, bytes) => {
+        Literal(loc, offset, bytes) => {
             pack_tag(w, Tag::Literal)?;
+            w.write_u32::<LittleEndian>(*loc)?;
             w.write_u16::<LittleEndian>(*offset as u16)?;
             pack_bytes(w, bytes)?;
         }
-        Shadow(origin) => {
+        Shadow(loc, origin) => {
             pack_tag(w, Tag::Shadow)?;
+            w.write_u32::<LittleEndian>(*loc)?;
             w.write_u32::<LittleEndian>(origin.loc)?;
             w.write_u32::<LittleEndian>(origin.seq_nr)?;
         }
-        Overwrite(idx, k, v) => {
+        Overwrite(loc, idx, k, v) => {
             pack_tag(w, Tag::Overwrite)?;
+            w.write_u32::<LittleEndian>(*loc)?;
             w.write_u16::<LittleEndian>(*idx as u16)?;
             w.write_u32::<LittleEndian>(*k)?;
             pack_bytes(w, v)?;
         }
-        Insert(idx, k, v) => {
+        Insert(loc, idx, k, v) => {
             pack_tag(w, Tag::Insert)?;
+            w.write_u32::<LittleEndian>(*loc)?;
             w.write_u16::<LittleEndian>(*idx as u16)?;
             w.write_u32::<LittleEndian>(*k)?;
             pack_bytes(w, v)?;
         }
-        Prepend(keys, values) => {
+        Prepend(loc, keys, values) => {
             assert!(keys.len() == values.len());
 
             pack_tag(w, Tag::Prepend)?;
+            w.write_u32::<LittleEndian>(*loc)?;
             w.write_u16::<LittleEndian>(keys.len() as u16)?;
             for (k, v) in keys.iter().zip(values.iter()) {
                 w.write_u32::<LittleEndian>(*k)?;
                 pack_bytes(w, v)?;
             }
         }
-        Append(keys, values) => {
+        Append(loc, keys, values) => {
             assert!(keys.len() == values.len());
 
             pack_tag(w, Tag::Prepend)?;
+            w.write_u32::<LittleEndian>(*loc)?;
             w.write_u16::<LittleEndian>(keys.len() as u16)?;
             for (k, v) in keys.iter().zip(values.iter()) {
                 w.write_u32::<LittleEndian>(*k)?;
                 pack_bytes(w, v)?;
             }
         }
-        Erase(idx_b, idx_e) => {
+        Erase(loc, idx_b, idx_e) => {
             pack_tag(w, Tag::Erase)?;
+            w.write_u32::<LittleEndian>(*loc)?;
             w.write_u16::<LittleEndian>(*idx_b as u16)?;
             w.write_u16::<LittleEndian>(*idx_e as u16)?;
         }
@@ -187,50 +224,81 @@ fn unpack_op<R: Read>(r: &mut R) -> Result<Entry> {
             let (b, e) = unpack_begin_end(r)?;
             Ok(AllocMetadata(b, e))
         }
-        Tag::AllocData => {
-            let (b, e) = unpack_begin_end(r)?;
-            Ok(AllocData(b, e))
-        }
         Tag::FreeMetadata => {
             let (b, e) = unpack_begin_end(r)?;
             Ok(FreeMetadata(b, e))
+        }
+
+        Tag::AllocData => {
+            let (b, e) = unpack_begin_end(r)?;
+            Ok(AllocData(b, e))
         }
         Tag::FreeData => {
             let (b, e) = unpack_begin_end(r)?;
             Ok(FreeData(b, e))
         }
+
+        Tag::NewDev => {
+            let id = r.read_u64::<LittleEndian>()?;
+            let size = r.read_u64::<LittleEndian>()?;
+            let root = r.read_u32::<LittleEndian>()?;
+            Ok(NewDev(id, size, root))
+        }
+        Tag::NewRoot => {
+            let id = r.read_u64::<LittleEndian>()?;
+            let root = r.read_u32::<LittleEndian>()?;
+            Ok(NewRoot(id, root))
+        }
+        Tag::DelDev => {
+            let id = r.read_u64::<LittleEndian>()?;
+            Ok(DelDev(id))
+        }
+
         Tag::SetSeq => {
+            let loc = r.read_u32::<LittleEndian>()?;
             let seq = r.read_u32::<LittleEndian>()?;
-            Ok(SetSeq(seq))
+            Ok(SetSeq(loc, seq))
         }
         Tag::Zero => {
+            let loc = r.read_u32::<LittleEndian>()?;
             let begin = r.read_u16::<LittleEndian>()? as usize;
             let end = r.read_u16::<LittleEndian>()? as usize;
-            Ok(Zero(begin, end))
+            Ok(Zero(loc, begin, end))
         }
         Tag::Literal => {
+            let loc = r.read_u32::<LittleEndian>()?;
             let offset = r.read_u16::<LittleEndian>()? as usize;
             let bytes = unpack_bytes(r)?;
-            Ok(Literal(offset, bytes))
+            Ok(Literal(loc, offset, bytes))
         }
         Tag::Shadow => {
             let loc = r.read_u32::<LittleEndian>()?;
+            let origin = r.read_u32::<LittleEndian>()?;
             let seq_nr = r.read_u32::<LittleEndian>()?;
-            Ok(Shadow(NodePtr { loc, seq_nr }))
+            Ok(Shadow(
+                loc,
+                NodePtr {
+                    loc: origin,
+                    seq_nr,
+                },
+            ))
         }
         Tag::Overwrite => {
+            let loc = r.read_u32::<LittleEndian>()?;
             let idx = r.read_u16::<LittleEndian>()? as u32;
             let k = r.read_u32::<LittleEndian>()?;
             let v = unpack_bytes(r)?;
-            Ok(Overwrite(idx, k, v))
+            Ok(Overwrite(loc, idx, k, v))
         }
         Tag::Insert => {
+            let loc = r.read_u32::<LittleEndian>()?;
             let idx = r.read_u16::<LittleEndian>()? as u32;
             let k = r.read_u32::<LittleEndian>()?;
             let v = unpack_bytes(r)?;
-            Ok(Insert(idx, k, v))
+            Ok(Insert(loc, idx, k, v))
         }
         Tag::Prepend => {
+            let loc = r.read_u32::<LittleEndian>()?;
             let len = r.read_u16::<LittleEndian>()? as usize;
             let mut keys = Vec::with_capacity(len);
             let mut values = Vec::with_capacity(len);
@@ -238,9 +306,10 @@ fn unpack_op<R: Read>(r: &mut R) -> Result<Entry> {
                 keys.push(r.read_u32::<LittleEndian>()?);
                 values.push(unpack_bytes(r)?);
             }
-            Ok(Prepend(keys, values))
+            Ok(Prepend(loc, keys, values))
         }
         Tag::Append => {
+            let loc = r.read_u32::<LittleEndian>()?;
             let len = r.read_u16::<LittleEndian>()? as usize;
             let mut keys = Vec::with_capacity(len);
             let mut values = Vec::with_capacity(len);
@@ -248,12 +317,13 @@ fn unpack_op<R: Read>(r: &mut R) -> Result<Entry> {
                 keys.push(r.read_u32::<LittleEndian>()?);
                 values.push(unpack_bytes(r)?);
             }
-            Ok(Append(keys, values))
+            Ok(Append(loc, keys, values))
         }
         Tag::Erase => {
+            let loc = r.read_u32::<LittleEndian>()?;
             let idx_b = r.read_u16::<LittleEndian>()? as u32;
             let idx_e = r.read_u16::<LittleEndian>()? as u32;
-            Ok(Erase(idx_b, idx_e))
+            Ok(Erase(loc, idx_b, idx_e))
         }
     }
 }
@@ -269,13 +339,13 @@ fn unpack_node_ops<R: Read>(r: &mut R) -> Result<(MetadataBlock, Vec<Entry>)> {
     Ok((loc, ops))
 }
 
-pub struct NodeLog {
+pub struct Journal {
     slab: SlabFile,
     nodes: BTreeMap<MetadataBlock, Vec<Entry>>,
     seqs: BTreeMap<MetadataBlock, SequenceNr>,
 }
 
-impl NodeLog {
+impl Journal {
     pub fn create<P: AsRef<Path>>(path: P) -> Result<Self> {
         let slab = SlabFileBuilder::create(path)
             .read(true)

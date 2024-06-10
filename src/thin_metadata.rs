@@ -7,7 +7,6 @@ use std::sync::Arc;
 use crate::block_cache::*;
 use crate::buddy_alloc::*;
 use crate::journal::*;
-use crate::transaction_manager::TransactionManager;
 use crate::types::*;
 
 //-------------------------------------------------------------------------

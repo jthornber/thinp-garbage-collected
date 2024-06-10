@@ -1,8 +1,6 @@
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use linked_hash_map::*;
 use std::collections::BTreeMap;
 use std::io::{self, Result};
-use std::io::{Read, Write};
 use std::sync::{Arc, Condvar, Mutex};
 use std::thread::ThreadId;
 use thinp::io_engine::*;
@@ -157,7 +155,7 @@ pub enum PushResult {
     AddAndEvict(u32),
 }
 
-struct MetadataCacheInner {
+struct BlockCacheInner {
     nr_blocks: u32,
     nr_held: usize,
     capacity: usize,
@@ -168,7 +166,7 @@ struct MetadataCacheInner {
     cache: BTreeMap<u32, Arc<CacheEntry>>,
 }
 
-impl MetadataCacheInner {
+impl BlockCacheInner {
     pub fn new(engine: Arc<dyn IoEngine>, capacity: usize) -> Result<Self> {
         let nr_blocks = engine.get_nr_blocks() as u32;
         Ok(Self {
@@ -344,7 +342,7 @@ impl MetadataCacheInner {
 #[derive(Clone)]
 pub struct SharedProxy_ {
     pub loc: u32,
-    cache: Arc<MetadataCache>,
+    cache: Arc<BlockCache>,
     entry: Arc<CacheEntry>,
 }
 
@@ -396,7 +394,7 @@ impl Readable for SharedProxy {
 #[derive(Clone)]
 pub struct ExclusiveProxy_ {
     pub loc: MetadataBlock,
-    cache: Arc<MetadataCache>,
+    cache: Arc<BlockCache>,
     entry: Arc<CacheEntry>,
 }
 
@@ -451,20 +449,20 @@ impl Writeable for ExclusiveProxy {
 
 //-------------------------------------------------------------------------
 
-pub struct MetadataCache {
-    inner: Mutex<MetadataCacheInner>,
+pub struct BlockCache {
+    inner: Mutex<BlockCacheInner>,
 }
 
-impl Drop for MetadataCache {
+impl Drop for BlockCache {
     fn drop(&mut self) {
         self.flush()
             .expect("flush failed when dropping metadata cache");
     }
 }
 
-impl MetadataCache {
+impl BlockCache {
     pub fn new(engine: Arc<dyn IoEngine>, capacity: usize) -> Result<Self> {
-        let inner = MetadataCacheInner::new(engine, capacity)?;
+        let inner = BlockCacheInner::new(engine, capacity)?;
         Ok(Self {
             inner: Mutex::new(inner),
         })
@@ -620,6 +618,7 @@ mod test {
     use super::*;
     use crate::core::*;
     use anyhow::{ensure, Result};
+    use byteorder::WriteBytesExt;
     use std::io;
     use std::sync::Arc;
 
@@ -648,14 +647,14 @@ mod test {
     #[test]
     fn test_create() -> Result<()> {
         let engine = mk_engine(16);
-        let _cache = Arc::new(MetadataCache::new(engine, 16)?);
+        let _cache = Arc::new(BlockCache::new(engine, 16)?);
         Ok(())
     }
 
     #[test]
     fn test_new_block() -> Result<()> {
         let engine = mk_engine(16);
-        let cache = Arc::new(MetadataCache::new(engine, 16)?);
+        let cache = Arc::new(BlockCache::new(engine, 16)?);
         let mut wp = cache.zero_lock(0)?;
         stamp(wp.rw(), 21)?;
         drop(wp);
@@ -677,7 +676,7 @@ mod test {
 
         {
             const CACHE_SIZE: usize = 16;
-            let cache = Arc::new(MetadataCache::new(engine.clone(), CACHE_SIZE)?);
+            let cache = Arc::new(BlockCache::new(engine.clone(), CACHE_SIZE)?);
 
             for i in 0..nr_blocks {
                 let mut wp = cache.zero_lock(i)?;
@@ -687,7 +686,7 @@ mod test {
         }
 
         {
-            let cache = Arc::new(MetadataCache::new(engine, 16)?);
+            let cache = Arc::new(BlockCache::new(engine, 16)?);
 
             for i in 0..nr_blocks {
                 let rp = cache.shared_lock(i)?;
@@ -705,7 +704,7 @@ mod test {
 
         {
             const CACHE_SIZE: usize = 16;
-            let cache = Arc::new(MetadataCache::new(engine.clone(), CACHE_SIZE)?);
+            let cache = Arc::new(BlockCache::new(engine.clone(), CACHE_SIZE)?);
 
             for i in 0..nr_blocks {
                 let mut wp = cache.zero_lock(i)?;
@@ -716,7 +715,7 @@ mod test {
 
         {
             const CACHE_SIZE: usize = 16;
-            let cache = Arc::new(MetadataCache::new(engine.clone(), CACHE_SIZE)?);
+            let cache = Arc::new(BlockCache::new(engine.clone(), CACHE_SIZE)?);
 
             for i in 0..nr_blocks {
                 let mut wp = cache.zero_lock(i)?;
@@ -726,7 +725,7 @@ mod test {
         }
 
         {
-            let cache = Arc::new(MetadataCache::new(engine, 16)?);
+            let cache = Arc::new(BlockCache::new(engine, 16)?);
 
             for i in 0..nr_blocks {
                 let rp = cache.shared_lock(i)?;
@@ -740,7 +739,7 @@ mod test {
     #[test]
     fn test_zerolock_cached_block() -> Result<()> {
         let engine = mk_engine(16);
-        let cache = Arc::new(MetadataCache::new(engine.clone(), 16)?);
+        let cache = Arc::new(BlockCache::new(engine.clone(), 16)?);
         {
             cache.zero_lock(0)?;
         }

@@ -13,7 +13,7 @@ fn insert_into_internal<
     INode: NodeW<NodePtr, ExclusiveProxy>,
     LNode: NodeW<V, ExclusiveProxy>,
 >(
-    alloc: &mut NodeAlloc,
+    alloc: &NodeCache,
     n_ptr: NodePtr,
     key: u32,
     value: &V,
@@ -36,7 +36,7 @@ fn insert_into_internal<
 }
 
 fn insert_into_leaf<V: Serializable, LNode: NodeW<V, ExclusiveProxy>>(
-    alloc: &mut NodeAlloc,
+    alloc: &NodeCache,
     n_ptr: NodePtr,
     key: u32,
     value: &V,
@@ -69,7 +69,7 @@ fn insert_recursive<
     INode: NodeW<NodePtr, ExclusiveProxy>,
     LNode: NodeW<V, ExclusiveProxy>,
 >(
-    alloc: &mut NodeAlloc,
+    alloc: &NodeCache,
     n_ptr: NodePtr,
     key: u32,
     value: &V,
@@ -87,19 +87,17 @@ pub fn insert<
     INode: NodeW<NodePtr, ExclusiveProxy>,
     LNode: NodeW<V, ExclusiveProxy>,
 >(
-    alloc: &mut NodeAlloc,
+    cache: &NodeCache,
     root: NodePtr,
     key: u32,
     value: &V,
 ) -> Result<NodePtr> {
     use NodeResult::*;
 
-    match insert_recursive::<V, INode, LNode>(alloc, root, key, value)? {
+    match insert_recursive::<V, INode, LNode>(cache, root, key, value)? {
         Single(NodeInfo { n_ptr, .. }) => Ok(n_ptr),
         Pair(left, right) => {
-            let block = alloc.new_block()?;
-            INode::init(block.loc(), block.clone(), false)?;
-            let mut parent = INode::open(block.loc(), block.clone())?;
+            let mut parent: INode = cache.new_node(false)?;
             parent.append(
                 &[left.key_min.unwrap(), right.key_min.unwrap()],
                 &[left.n_ptr, right.n_ptr],

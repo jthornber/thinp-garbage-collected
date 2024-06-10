@@ -2,7 +2,6 @@ use anyhow::{ensure, Result};
 use std::collections::{BTreeSet, VecDeque};
 use std::sync::Arc;
 
-use crate::block_allocator::BlockRef;
 use crate::block_cache::*;
 use crate::btree::insert;
 use crate::btree::lookup;
@@ -10,13 +9,11 @@ use crate::btree::node::*;
 use crate::btree::node_alloc::*;
 use crate::btree::remove;
 use crate::packed_array::*;
-use crate::transaction_manager::*;
 
 //-------------------------------------------------------------------------
 
 pub struct BTree<V: Serializable + Copy, INodeR, INodeW, LNodeR, LNodeW> {
-    tm: Arc<TransactionManager>,
-    context: ReferenceContext,
+    cache: Arc<NodeCache>,
     root: NodePtr,
     phantom_v: std::marker::PhantomData<V>,
     phantom_inode_r: std::marker::PhantomData<INodeR>,
@@ -33,14 +30,9 @@ impl<
         LNodeW: NodeW<V, ExclusiveProxy>,
     > BTree<V, INodeR, INodeW, LNodeR, LNodeW>
 {
-    pub fn open_tree(
-        tm: Arc<TransactionManager>,
-        context: ReferenceContext,
-        root: NodePtr,
-    ) -> Self {
+    pub fn open_tree(cache: Arc<NodeCache>, root: NodePtr) -> Self {
         Self {
-            tm,
-            context,
+            cache,
             root,
             phantom_v: std::marker::PhantomData,
             phantom_inode_r: std::marker::PhantomData,
@@ -50,17 +42,12 @@ impl<
         }
     }
 
-    pub fn empty_tree(tm: Arc<TransactionManager>, context: ReferenceContext) -> Result<Self> {
-        let b = tm.new_block(context)?;
-        let root = NodePtr {
-            loc: b.loc(),
-            seq_nr: 0,
-        };
-        LNodeW::init(root.loc, b, true)?;
+    pub fn empty_tree(cache: Arc<NodeCache>) -> Result<Self> {
+        let node = cache.new_node::<V, LNodeW>(true)?;
+        let root = node.n_ptr();
 
         Ok(Self {
-            tm,
-            context,
+            cache,
             root,
             phantom_v: std::marker::PhantomData,
             phantom_inode_r: std::marker::PhantomData,
@@ -70,10 +57,10 @@ impl<
         })
     }
 
-    pub fn clone(&self, context: ReferenceContext) -> Self {
+    // FIXME: name clash with trait
+    pub fn clone(&self) -> Self {
         Self {
-            tm: self.tm.clone(),
-            context,
+            cache: self.cache.clone(),
             root: self.root,
             phantom_v: std::marker::PhantomData,
             phantom_inode_r: std::marker::PhantomData,
@@ -90,36 +77,31 @@ impl<
     //-------------------------------
 
     pub fn lookup(&self, key: u32) -> Result<Option<V>> {
-        lookup::lookup::<V, INodeR, LNodeR>(&self.tm, self.root, key)
-    }
-
-    fn mk_alloc(&self) -> NodeAlloc {
-        NodeAlloc::new(self.tm.clone(), self.context)
+        lookup::lookup::<V, INodeR, LNodeR>(&self.cache, self.root, key)
     }
 
     pub fn insert(&mut self, key: u32, value: &V) -> Result<()> {
-        let mut alloc = self.mk_alloc();
-        self.root = insert::insert::<V, INodeW, LNodeW>(&mut alloc, self.root, key, value)?;
+        self.root =
+            insert::insert::<V, INodeW, LNodeW>(self.cache.as_ref(), self.root, key, value)?;
         Ok(())
     }
 
     pub fn remove(&mut self, key: u32) -> Result<()> {
-        let mut alloc = self.mk_alloc();
-        let root = remove::remove::<V, INodeW, LNodeW>(&mut alloc, self.root, key)?;
+        let root = remove::remove::<V, INodeW, LNodeW>(self.cache.as_ref(), self.root, key)?;
         self.root = root;
         Ok(())
     }
 
     pub fn remove_geq(&mut self, key: u32, val_fn: &ValFn<V>) -> Result<()> {
-        let mut alloc = self.mk_alloc();
-        let new_root = remove::remove_geq::<V, INodeW, LNodeW>(&mut alloc, self.root, key, val_fn)?;
+        let new_root =
+            remove::remove_geq::<V, INodeW, LNodeW>(self.cache.as_ref(), self.root, key, val_fn)?;
         self.root = new_root;
         Ok(())
     }
 
     pub fn remove_lt(&mut self, key: u32, val_fn: &ValFn<V>) -> Result<()> {
-        let mut alloc = self.mk_alloc();
-        let new_root = remove::remove_lt::<V, INodeW, LNodeW>(&mut alloc, self.root, key, val_fn)?;
+        let new_root =
+            remove::remove_lt::<V, INodeW, LNodeW>(self.cache.as_ref(), self.root, key, val_fn)?;
         self.root = new_root;
         Ok(())
     }
@@ -135,17 +117,13 @@ impl<
         select_below: &ValFn<V>,
     ) -> Result<Vec<(u32, V)>> {
         lookup::lookup_range::<V, INodeR, LNodeR>(
-            &self.tm,
+            self.cache.as_ref(),
             self.root,
             key_begin,
             key_end,
             select_below,
             select_above,
         )
-    }
-
-    pub fn insert_range(&mut self, _kvs: &[(u32, V)]) -> Result<()> {
-        todo!();
     }
 
     pub fn remove_range(
@@ -155,9 +133,13 @@ impl<
         val_lt: &ValFn<V>,
         val_geq: &ValFn<V>,
     ) -> Result<()> {
-        let mut alloc = self.mk_alloc();
         self.root = remove::remove_range::<V, INodeW, LNodeW>(
-            &mut alloc, self.root, key_begin, key_end, val_lt, val_geq,
+            self.cache.as_ref(),
+            self.root,
+            key_begin,
+            key_end,
+            val_lt,
+            val_geq,
         )?;
         Ok(())
     }
@@ -202,32 +184,26 @@ impl<
         ensure!(!seen.contains(&n_ptr.loc));
         seen.insert(n_ptr.loc);
 
-        let r_proxy = self.tm.read(n_ptr.loc).unwrap();
-        let flags = read_flags(&r_proxy)?;
+        if self.cache.is_internal(n_ptr)? {
+            let node: INodeR = self.cache.read(n_ptr)?;
 
-        match flags {
-            BTreeFlags::Internal => {
-                let node = INodeR::open(r_proxy.loc(), r_proxy)?;
+            Self::check_keys_(&node, key_min, key_max)?;
 
-                Self::check_keys_(&node, key_min, key_max)?;
-
-                for i in 0..node.nr_entries() {
-                    let kmin = node.get_key(i);
-                    // FIXME: redundant if, get_key_safe will handle it
-                    let kmax = if i == node.nr_entries() - 1 {
-                        None
-                    } else {
-                        node.get_key_safe(i + 1)
-                    };
-                    let loc = node.get_value(i);
-                    total += self.check_(loc, kmin, kmax, seen)?;
-                }
+            for i in 0..node.nr_entries() {
+                let kmin = node.get_key(i);
+                // FIXME: redundant if, get_key_safe will handle it
+                let kmax = if i == node.nr_entries() - 1 {
+                    None
+                } else {
+                    node.get_key_safe(i + 1)
+                };
+                let loc = node.get_value(i);
+                total += self.check_(loc, kmin, kmax, seen)?;
             }
-            BTreeFlags::Leaf => {
-                let node = LNodeR::open(r_proxy.loc(), r_proxy)?;
-                Self::check_keys_(&node, key_min, key_max)?;
-                total += node.nr_entries() as u32;
-            }
+        } else {
+            let node: LNodeR = self.cache.read(n_ptr)?;
+            Self::check_keys_(&node, key_min, key_max)?;
+            total += node.nr_entries() as u32;
         }
 
         Ok(total)
@@ -241,6 +217,7 @@ impl<
     }
 }
 
+/*
 pub fn btree_refs(r_proxy: &SharedProxy, queue: &mut VecDeque<BlockRef>) {
     let flags = read_flags(&r_proxy).expect("couldn't read node");
 
@@ -262,16 +239,15 @@ pub fn btree_refs(r_proxy: &SharedProxy, queue: &mut VecDeque<BlockRef>) {
         }
     }
 }
+*/
 
 //-------------------------------------------------------------------------
 
 #[cfg(test)]
 mod test {
     use super::*;
-    use crate::block_allocator::*;
     use crate::btree::simple_node::*;
     use crate::core::*;
-    use crate::scope_id;
     use anyhow::{ensure, Result};
     use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
     use rand::seq::SliceRandom;
@@ -283,15 +259,6 @@ mod test {
 
     fn mk_engine(nr_blocks: u32) -> Arc<dyn IoEngine> {
         Arc::new(CoreIoEngine::new(nr_blocks as u64))
-    }
-
-    fn mk_allocator(
-        cache: Arc<MetadataCache>,
-        nr_data_blocks: u64,
-    ) -> Result<Arc<Mutex<BlockAllocator>>> {
-        const SUPERBLOCK_LOCATION: u32 = 0;
-        let allocator = BlockAllocator::new(cache, nr_data_blocks, SUPERBLOCK_LOCATION)?;
-        Ok(Arc::new(Mutex::new(allocator)))
     }
 
     // We'll test with a value type that is a different size to the internal node values (u32).
@@ -330,36 +297,29 @@ mod test {
     #[allow(dead_code)]
     struct Fixture {
         engine: Arc<dyn IoEngine>,
-        cache: Arc<MetadataCache>,
-        allocator: Arc<Mutex<BlockAllocator>>,
-        tm: Arc<TransactionManager>,
+        cache: Arc<NodeCache>,
         tree: TestTree,
     }
 
     impl Fixture {
         fn new(nr_metadata_blocks: u32, nr_data_blocks: u64) -> Result<Self> {
             let engine = mk_engine(nr_metadata_blocks);
-            let cache = Arc::new(MetadataCache::new(engine.clone(), 16)?);
-            let allocator = mk_allocator(cache.clone(), nr_data_blocks)?;
-            let tm = Arc::new(TransactionManager::new(allocator.clone(), cache.clone()));
-            let tree = BTree::empty_tree(tm.clone(), ReferenceContext::ThinId(0))?;
+            let block_cache = Arc::new(BlockCache::new(engine.clone(), 16)?);
+            let node_cache = Arc::new(NodeCache::new(block_cache));
+            let tree = BTree::empty_tree(node_cache.clone())?;
 
             Ok(Self {
                 engine,
-                cache,
-                allocator,
-                tm,
+                cache: node_cache,
                 tree,
             })
         }
 
-        fn clone(&self, context: ReferenceContext) -> Self {
+        fn clone(&self) -> Self {
             Self {
                 engine: self.engine.clone(),
                 cache: self.cache.clone(),
-                allocator: self.allocator.clone(),
-                tm: self.tm.clone(),
-                tree: self.tree.clone(context),
+                tree: self.tree.clone(),
             }
         }
 
@@ -381,7 +341,9 @@ mod test {
 
         fn commit(&mut self) -> Result<()> {
             let roots = vec![self.tree.root().loc];
-            self.tm.commit(&roots)
+
+            // FIXME: finish
+            Ok(())
         }
     }
 
@@ -634,8 +596,7 @@ mod test {
 
         for i in 0..nr_loops {
             eprintln!("loop {}", i);
-            let scope = scope_id::new_scope(fix.tm.scopes());
-            let mut fix = fix.clone(ReferenceContext::Scoped(scope.id));
+            let mut fix = fix.clone();
             let cut = rand::thread_rng().gen_range(0..nr_entries);
             remove_geq_and_verify(&mut fix, cut)?;
         }
@@ -653,14 +614,14 @@ mod test {
 
         for i in 0..nr_loops {
             eprintln!("loop {}", i);
-            let scope = scope_id::new_scope(fix.tm.scopes());
-            let mut fix = fix.clone(ReferenceContext::Scoped(scope.id));
+            let mut fix = fix.clone();
             let cut = rand::thread_rng().gen_range(0..nr_entries);
             remove_lt_and_verify(&mut fix, nr_entries, cut)?;
         }
 
         Ok(())
     }
+
     #[test]
     fn remove_geq_split() -> Result<()> {
         let mut fix = Fixture::new(1024, 102400)?;

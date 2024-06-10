@@ -37,7 +37,7 @@ impl BuddyAllocator {
         }
     }
 
-    fn alloc(&mut self, order: usize) -> Result<u64> {
+    pub fn alloc(&mut self, order: usize) -> Option<u64> {
         // We search up through the orders looking for one that
         // contains some free blocks.  We then split this block
         // back down through the orders, until we have one of the
@@ -45,7 +45,7 @@ impl BuddyAllocator {
         let mut high_order = order;
         loop {
             if high_order >= self.free_blocks.len() {
-                return Err(anyhow!("out of space"));
+                return None;
             }
 
             if !self.free_blocks[high_order].is_empty() {
@@ -65,7 +65,7 @@ impl BuddyAllocator {
 
         assert!(!self.allocated.contains_key(&index));
         self.allocated.insert(index, order);
-        Ok(index)
+        Some(index)
     }
 
     // FIXME: rename index -> block?
@@ -113,10 +113,10 @@ fn test_alloc_small() -> Result<()> {
     let mut buddy = BuddyAllocator::new(10);
 
     // order 0, is a single byte
-    let index = buddy.alloc(0)?;
+    let index = buddy.alloc(0).unwrap();
     assert!(index == 0);
     buddy.free(index)?;
-    let index = buddy.alloc(0)?;
+    let index = buddy.alloc(0).unwrap();
     assert!(index == 0);
     Ok(())
 }

@@ -2,47 +2,41 @@ use anyhow::Result;
 
 use crate::block_cache::*;
 use crate::btree::node::*;
+use crate::btree::node_alloc::*;
 use crate::packed_array::*;
-use crate::transaction_manager::*;
 
 //-------------------------------------------------------------------------
 
 pub fn lookup<V: Serializable, INode: NodeR<NodePtr, SharedProxy>, LNode: NodeR<V, SharedProxy>>(
-    tm: &TransactionManager,
+    cache: &NodeCache,
     root: NodePtr,
     key: u32,
 ) -> Result<Option<V>> {
-    let mut r_proxy = tm.read(root.loc)?;
+    let mut n_ptr = root;
 
     loop {
-        let flags = read_flags(&r_proxy)?;
+        if cache.is_internal(n_ptr)? {
+            let node: INode = cache.read(n_ptr)?;
 
-        match flags {
-            BTreeFlags::Internal => {
-                let node = INode::open(r_proxy.loc(), r_proxy)?;
-
-                let idx = node.lower_bound(key);
-                if idx < 0 || idx >= node.nr_entries() as isize {
-                    return Ok(None);
-                }
-
-                let child = node.get_value(idx as usize);
-                r_proxy = tm.read(child.loc)?;
+            let idx = node.lower_bound(key);
+            if idx < 0 || idx >= node.nr_entries() as isize {
+                return Ok(None);
             }
-            BTreeFlags::Leaf => {
-                let node = LNode::open(r_proxy.loc(), r_proxy)?;
 
-                let idx = node.lower_bound(key);
-                if idx < 0 || idx >= node.nr_entries() as isize {
-                    return Ok(None);
-                }
+            n_ptr = node.get_value(idx as usize);
+        } else {
+            let node: LNode = cache.read(n_ptr)?;
 
-                return if node.get_key(idx as usize) == key {
-                    Ok(node.get_value_safe(idx as usize))
-                } else {
-                    Ok(None)
-                };
+            let idx = node.lower_bound(key);
+            if idx < 0 || idx >= node.nr_entries() as isize {
+                return Ok(None);
             }
+
+            return if node.get_key(idx as usize) == key {
+                Ok(node.get_value_safe(idx as usize))
+            } else {
+                Ok(None)
+            };
         }
     }
 }
@@ -160,7 +154,7 @@ fn select_above<
     INode: NodeR<NodePtr, SharedProxy>,
     LNode: NodeR<V, SharedProxy>,
 >(
-    tm: &TransactionManager,
+    cache: &NodeCache,
     n_ptr: NodePtr,
     key: u32,
     val_above: &ValFn<V>,
@@ -168,53 +162,50 @@ fn select_above<
 ) -> Result<()> {
     use NodeOp::*;
 
-    let r_proxy = tm.read(n_ptr.loc)?;
-    match read_flags(&r_proxy)? {
-        BTreeFlags::Internal => {
-            let node = INode::open(n_ptr.loc, r_proxy)?;
+    if cache.is_internal(n_ptr)? {
+        let node: INode = cache.read(n_ptr)?;
 
-            for op in get_prog_above(&node, key) {
-                match op {
-                    AboveAndBelow(_) | Below(_) => {
-                        unreachable!();
-                    }
-                    Above(idx) => {
-                        select_above::<V, INode, LNode>(
-                            tm,
-                            node.get_value(idx),
-                            key,
-                            val_above,
-                            results,
-                        )?;
-                    }
-                    All(idx) => {
-                        select_all::<V, INode, LNode>(tm, node.get_value(idx), results)?;
-                    }
+        for op in get_prog_above(&node, key) {
+            match op {
+                AboveAndBelow(_) | Below(_) => {
+                    unreachable!();
+                }
+                Above(idx) => {
+                    select_above::<V, INode, LNode>(
+                        cache,
+                        node.get_value(idx),
+                        key,
+                        val_above,
+                        results,
+                    )?;
+                }
+                All(idx) => {
+                    select_all::<V, INode, LNode>(cache, node.get_value(idx), results)?;
                 }
             }
         }
-        BTreeFlags::Leaf => {
-            let node = LNode::open(n_ptr.loc, r_proxy)?;
-            for op in get_prog_above::<V, LNode>(&node, key) {
-                match op {
-                    AboveAndBelow(_) => {
-                        unreachable!();
+    } else {
+        let node: LNode = cache.read(n_ptr)?;
+        for op in get_prog_above::<V, LNode>(&node, key) {
+            match op {
+                AboveAndBelow(_) => {
+                    unreachable!();
+                }
+                Below(_) => {
+                    unreachable!();
+                }
+                Above(idx) => {
+                    if let Some((nk, nv)) = val_above(key, node.get_value(idx)) {
+                        results.push((nk, nv));
                     }
-                    Below(_) => {
-                        unreachable!();
-                    }
-                    Above(idx) => {
-                        if let Some((nk, nv)) = val_above(key, node.get_value(idx)) {
-                            results.push((nk, nv));
-                        }
-                    }
-                    All(idx) => {
-                        results.push((node.get_key(idx), node.get_value(idx)));
-                    }
+                }
+                All(idx) => {
+                    results.push((node.get_key(idx), node.get_value(idx)));
                 }
             }
         }
     }
+
     Ok(())
 }
 
@@ -223,85 +214,75 @@ fn select_below<
     INode: NodeR<NodePtr, SharedProxy>,
     LNode: NodeR<V, SharedProxy>,
 >(
-    tm: &TransactionManager,
+    cache: &NodeCache,
     n_ptr: NodePtr,
     key: u32,
     val_below: &ValFn<V>,
     results: &mut Vec<(u32, V)>,
 ) -> Result<()> {
-    use BTreeFlags::*;
     use NodeOp::*;
 
-    let r_proxy = tm.read(n_ptr.loc)?;
-    match read_flags(&r_proxy)? {
-        Internal => {
-            let node = INode::open(n_ptr.loc, r_proxy)?;
+    if cache.is_internal(n_ptr)? {
+        let node: INode = cache.read(n_ptr)?;
 
-            for op in get_prog_below(&node, key) {
-                match op {
-                    AboveAndBelow(_) | Above(_) => {
-                        unreachable!();
-                    }
-                    Below(idx) => {
-                        select_below::<V, INode, LNode>(
-                            tm,
-                            node.get_value(idx),
-                            key,
-                            val_below,
-                            results,
-                        )?;
-                    }
-                    All(idx) => {
-                        select_all::<V, INode, LNode>(tm, node.get_value(idx), results)?;
-                    }
+        for op in get_prog_below(&node, key) {
+            match op {
+                AboveAndBelow(_) | Above(_) => {
+                    unreachable!();
+                }
+                Below(idx) => {
+                    select_below::<V, INode, LNode>(
+                        cache,
+                        node.get_value(idx),
+                        key,
+                        val_below,
+                        results,
+                    )?;
+                }
+                All(idx) => {
+                    select_all::<V, INode, LNode>(cache, node.get_value(idx), results)?;
                 }
             }
         }
-        Leaf => {
-            let node = LNode::open(n_ptr.loc, r_proxy)?;
-            for op in get_prog_below::<V, LNode>(&node, key) {
-                match op {
-                    AboveAndBelow(_) => {
-                        unreachable!();
+    } else {
+        let node: LNode = cache.read(n_ptr)?;
+        for op in get_prog_below::<V, LNode>(&node, key) {
+            match op {
+                AboveAndBelow(_) => {
+                    unreachable!();
+                }
+                Above(_) => {
+                    unreachable!();
+                }
+                Below(idx) => {
+                    if let Some((nk, nv)) = val_below(key, node.get_value(idx)) {
+                        results.push((nk, nv));
                     }
-                    Above(_) => {
-                        unreachable!();
-                    }
-                    Below(idx) => {
-                        if let Some((nk, nv)) = val_below(key, node.get_value(idx)) {
-                            results.push((nk, nv));
-                        }
-                    }
-                    All(idx) => {
-                        results.push((node.get_key(idx), node.get_value(idx)));
-                    }
+                }
+                All(idx) => {
+                    results.push((node.get_key(idx), node.get_value(idx)));
                 }
             }
         }
     }
+
     Ok(())
 }
 
 fn select_all<V: Serializable, INode: NodeR<NodePtr, SharedProxy>, LNode: NodeR<V, SharedProxy>>(
-    tm: &TransactionManager,
+    cache: &NodeCache,
     n_ptr: NodePtr,
     results: &mut Vec<(u32, V)>,
 ) -> Result<()> {
-    use BTreeFlags::*;
-
-    let r_proxy = tm.read(n_ptr.loc)?;
-    match read_flags(&r_proxy)? {
-        Internal => {
-            let node = INode::open(n_ptr.loc, r_proxy)?;
-            for i in 0..node.nr_entries() {
-                select_all::<V, INode, LNode>(tm, node.get_value(i), results)?;
-            }
+    if cache.is_internal(n_ptr)? {
+        let node: INode = cache.read(n_ptr)?;
+        for i in 0..node.nr_entries() {
+            select_all::<V, INode, LNode>(cache, node.get_value(i), results)?;
         }
-        Leaf => {
-            let node = LNode::open(n_ptr.loc, r_proxy)?;
-            for i in 0..node.nr_entries() {
-                results.push((node.get_key(i), node.get_value(i)));
-            }
+    } else {
+        let node: LNode = cache.read(n_ptr)?;
+        for i in 0..node.nr_entries() {
+            results.push((node.get_key(i), node.get_value(i)));
         }
     }
     Ok(())
@@ -312,7 +293,7 @@ fn select_above_below<
     INode: NodeR<NodePtr, SharedProxy>,
     LNode: NodeR<V, SharedProxy>,
 >(
-    tm: &TransactionManager,
+    cache: &NodeCache,
     n_ptr: NodePtr,
     key_begin: u32,
     key_end: u32,
@@ -320,75 +301,70 @@ fn select_above_below<
     val_above: &ValFn<V>,
     results: &mut Vec<(u32, V)>,
 ) -> Result<()> {
-    use BTreeFlags::*;
     use NodeOp::*;
 
-    let r_proxy = tm.read(n_ptr.loc)?;
-    match read_flags(&r_proxy)? {
-        Internal => {
-            let node = INode::open(n_ptr.loc, r_proxy)?;
-            for op in get_prog(&node, key_begin, key_end) {
-                match op {
-                    AboveAndBelow(idx) => {
-                        select_above_below::<V, INode, LNode>(
-                            tm,
-                            node.get_value(idx),
-                            key_begin,
-                            key_end,
-                            val_below,
-                            val_above,
-                            results,
-                        )?;
-                    }
-                    Above(idx) => {
-                        select_above::<V, INode, LNode>(
-                            tm,
-                            node.get_value(idx),
-                            key_begin,
-                            val_above,
-                            results,
-                        )?;
-                    }
-                    Below(idx) => {
-                        select_below::<V, INode, LNode>(
-                            tm,
-                            node.get_value(idx),
-                            key_end,
-                            val_below,
-                            results,
-                        )?;
-                    }
-                    All(idx) => {
-                        select_all::<V, INode, LNode>(tm, node.get_value(idx), results)?;
-                    }
+    if cache.is_internal(n_ptr)? {
+        let node: INode = cache.read(n_ptr)?;
+        for op in get_prog(&node, key_begin, key_end) {
+            match op {
+                AboveAndBelow(idx) => {
+                    select_above_below::<V, INode, LNode>(
+                        cache,
+                        node.get_value(idx),
+                        key_begin,
+                        key_end,
+                        val_below,
+                        val_above,
+                        results,
+                    )?;
+                }
+                Above(idx) => {
+                    select_above::<V, INode, LNode>(
+                        cache,
+                        node.get_value(idx),
+                        key_begin,
+                        val_above,
+                        results,
+                    )?;
+                }
+                Below(idx) => {
+                    select_below::<V, INode, LNode>(
+                        cache,
+                        node.get_value(idx),
+                        key_end,
+                        val_below,
+                        results,
+                    )?;
+                }
+                All(idx) => {
+                    select_all::<V, INode, LNode>(cache, node.get_value(idx), results)?;
                 }
             }
         }
-        Leaf => {
-            let node = LNode::open(n_ptr.loc, r_proxy)?;
-            for op in get_prog::<V, LNode>(&node, key_begin, key_end) {
-                match op {
-                    AboveAndBelow(idx) => {
-                        // we need to use both trim functions
-                        if let Some((nk, nv)) = val_above(node.get_key(idx), node.get_value(idx)) {
-                            if let Some((nk, nv)) = val_below(nk, nv) {
-                                results.push((nk, nv));
-                            }
-                        }
-                    }
-                    Above(idx) => {
-                        if let Some((nk, nv)) = val_above(node.get_key(idx), node.get_value(idx)) {
+    } else {
+        let node: LNode = cache.read(n_ptr)?;
+        for op in get_prog::<V, LNode>(&node, key_begin, key_end) {
+            match op {
+                AboveAndBelow(idx) => {
+                    // we need to use both trim functions
+                    if let Some((nk, nv)) = val_above(node.get_key(idx), node.get_value(idx)) {
+                        if let Some((nk, nv)) = val_below(nk, nv) {
                             results.push((nk, nv));
                         }
                     }
-                    Below(idx) => {
-                        if let Some((nk, nv)) = val_below(node.get_key(idx), node.get_value(idx)) {
-                            results.push((nk, nv));
-                        }
+                }
+                Above(idx) => {
+                    if let Some((nk, nv)) = val_above(node.get_key(idx), node.get_value(idx)) {
+                        results.push((nk, nv));
                     }
-                    All(idx) => {
-                        results.push((node.get_key(idx), node.get_value(idx)));
+                }
+                Below(idx) => {
+                    if let Some((nk, nv)) = val_below(node.get_key(idx), node.get_value(idx)) {
+                        results.push((nk, nv));
                     }
+                }
+                All(idx) => {
+                    results.push((node.get_key(idx), node.get_value(idx)));
                 }
             }
         }
@@ -404,7 +380,7 @@ pub fn lookup_range<
     INode: NodeR<NodePtr, SharedProxy>,
     LNode: NodeR<V, SharedProxy>,
 >(
-    tm: &TransactionManager,
+    cache: &NodeCache,
     root: NodePtr,
     key_begin: u32,
     key_end: u32,
@@ -413,7 +389,7 @@ pub fn lookup_range<
 ) -> Result<Vec<(u32, V)>> {
     let mut results = Vec::with_capacity(16);
     select_above_below::<V, INode, LNode>(
-        tm,
+        cache,
         root,
         key_begin,
         key_end,

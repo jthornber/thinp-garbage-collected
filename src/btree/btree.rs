@@ -6,7 +6,7 @@ use crate::block_cache::*;
 use crate::btree::insert;
 use crate::btree::lookup;
 use crate::btree::node::*;
-use crate::btree::node_alloc::*;
+use crate::btree::node_cache::*;
 use crate::btree::remove;
 use crate::packed_array::*;
 

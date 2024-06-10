@@ -3,7 +3,7 @@ use anyhow::Result;
 
 use crate::block_cache::*;
 use crate::btree::node::*;
-use crate::btree::node_alloc::*;
+use crate::btree::node_cache::*;
 use crate::packed_array::*;
 
 //-------------------------------------------------------------------------

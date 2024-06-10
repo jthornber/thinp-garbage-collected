@@ -4,13 +4,11 @@ use std::sync::Arc;
 
 use crate::block_allocator::BlockRef;
 use crate::block_cache::*;
-use crate::block_kinds::*;
 use crate::btree::insert;
 use crate::btree::lookup;
 use crate::btree::node::*;
 use crate::btree::node_alloc::*;
 use crate::btree::remove;
-use crate::byte_types::*;
 use crate::packed_array::*;
 use crate::transaction_manager::*;
 
@@ -53,7 +51,7 @@ impl<
     }
 
     pub fn empty_tree(tm: Arc<TransactionManager>, context: ReferenceContext) -> Result<Self> {
-        let b = tm.new_block(context, &BNODE_KIND)?;
+        let b = tm.new_block(context)?;
         let root = NodePtr {
             loc: b.loc(),
             seq_nr: 0,
@@ -204,8 +202,8 @@ impl<
         ensure!(!seen.contains(&n_ptr.loc));
         seen.insert(n_ptr.loc);
 
-        let r_proxy = self.tm.read(n_ptr.loc, &BNODE_KIND).unwrap();
-        let flags = read_flags(r_proxy.r())?;
+        let r_proxy = self.tm.read(n_ptr.loc).unwrap();
+        let flags = read_flags(&r_proxy)?;
 
         match flags {
             BTreeFlags::Internal => {
@@ -244,7 +242,7 @@ impl<
 }
 
 pub fn btree_refs(r_proxy: &ReadProxy, queue: &mut VecDeque<BlockRef>) {
-    let flags = read_flags(r_proxy.r()).expect("couldn't read node");
+    let flags = read_flags(&r_proxy).expect("couldn't read node");
 
     match flags {
         BTreeFlags::Internal => {

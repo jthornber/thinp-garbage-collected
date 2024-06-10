@@ -1,7 +1,6 @@
 use anyhow::Result;
 
 use crate::block_cache::*;
-use crate::block_kinds::*;
 use crate::btree::node::*;
 use crate::byte_types::*;
 use crate::packed_array::*;
@@ -14,10 +13,10 @@ pub fn lookup<V: Serializable, INode: NodeR<NodePtr, ReadProxy>, LNode: NodeR<V,
     root: NodePtr,
     key: u32,
 ) -> Result<Option<V>> {
-    let mut r_proxy = tm.read(root.loc, &BNODE_KIND)?;
+    let mut r_proxy = tm.read(root.loc)?;
 
     loop {
-        let flags = read_flags(r_proxy.r())?;
+        let flags = read_flags(&r_proxy)?;
 
         match flags {
             BTreeFlags::Internal => {
@@ -29,7 +28,7 @@ pub fn lookup<V: Serializable, INode: NodeR<NodePtr, ReadProxy>, LNode: NodeR<V,
                 }
 
                 let child = node.get_value(idx as usize);
-                r_proxy = tm.read(child.loc, &BNODE_KIND)?;
+                r_proxy = tm.read(child.loc)?;
             }
             BTreeFlags::Leaf => {
                 let node = LNode::open(r_proxy.loc(), r_proxy)?;
@@ -166,8 +165,8 @@ fn select_above<V: Serializable, INode: NodeR<NodePtr, ReadProxy>, LNode: NodeR<
 ) -> Result<()> {
     use NodeOp::*;
 
-    let r_proxy = tm.read(n_ptr.loc, &BNODE_KIND)?;
-    match read_flags(r_proxy.r())? {
+    let r_proxy = tm.read(n_ptr.loc)?;
+    match read_flags(&r_proxy)? {
         BTreeFlags::Internal => {
             let node = INode::open(n_ptr.loc, r_proxy)?;
 
@@ -226,8 +225,8 @@ fn select_below<V: Serializable, INode: NodeR<NodePtr, ReadProxy>, LNode: NodeR<
     use BTreeFlags::*;
     use NodeOp::*;
 
-    let r_proxy = tm.read(n_ptr.loc, &BNODE_KIND)?;
-    match read_flags(r_proxy.r())? {
+    let r_proxy = tm.read(n_ptr.loc)?;
+    match read_flags(&r_proxy)? {
         Internal => {
             let node = INode::open(n_ptr.loc, r_proxy)?;
 
@@ -283,8 +282,8 @@ fn select_all<V: Serializable, INode: NodeR<NodePtr, ReadProxy>, LNode: NodeR<V,
 ) -> Result<()> {
     use BTreeFlags::*;
 
-    let r_proxy = tm.read(n_ptr.loc, &BNODE_KIND)?;
-    match read_flags(r_proxy.r())? {
+    let r_proxy = tm.read(n_ptr.loc)?;
+    match read_flags(&r_proxy)? {
         Internal => {
             let node = INode::open(n_ptr.loc, r_proxy)?;
             for i in 0..node.nr_entries() {
@@ -317,8 +316,8 @@ fn select_above_below<
     use BTreeFlags::*;
     use NodeOp::*;
 
-    let r_proxy = tm.read(n_ptr.loc, &BNODE_KIND)?;
-    match read_flags(r_proxy.r())? {
+    let r_proxy = tm.read(n_ptr.loc)?;
+    match read_flags(&r_proxy)? {
         Internal => {
             let node = INode::open(n_ptr.loc, r_proxy)?;
             for op in get_prog(&node, key_begin, key_end) {

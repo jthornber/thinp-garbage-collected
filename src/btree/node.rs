@@ -24,14 +24,47 @@ impl From<u32> for BTreeFlags {
     }
 }
 
-// Every node implementation must start with a u32 containing the flags.
-// This lets us discover if it's a leaf node or internal and instance
-// the appropriate type.
-pub fn read_flags(r: &[u8]) -> Result<BTreeFlags> {
-    let mut r = &r[BLOCK_HEADER_SIZE..];
-    let _seq_nr = r.read_u32::<LittleEndian>()?;
-    let flags = r.read_u32::<LittleEndian>()?;
-    Ok(BTreeFlags::from(flags))
+//-------------------------------------------------------------------------
+
+pub const NODE_SIZE: usize = 4096;
+pub const NODE_HEADER_SIZE: usize = 16;
+
+// We have a standard node header that is the same for all
+// implementations.
+// FIXME: merge kind and flags.
+pub struct NodeHeader {
+    pub kind: u32, // eg, SimpleNode, BlockTimeNode
+    pub seq_nr: u32,
+    pub flags: BTreeFlags,
+    pub nr_entries: u32,
+}
+
+pub fn write_node_header<W: Write>(w: &mut W, hdr: &NodeHeader) -> Result<()> {
+    w.write_u32::<LittleEndian>(hdr.kind)?;
+    w.write_u32::<LittleEndian>(hdr.seq_nr)?;
+    w.write_u32::<LittleEndian>(hdr.flags as u32)?;
+    w.write_u32::<LittleEndian>(hdr.nr_entries)?;
+
+    Ok(())
+}
+
+pub fn read_node_header<R: Read>(r: &mut R) -> Result<NodeHeader> {
+    let kind = r.read_u32::<LittleEndian>()?;
+    let seq_nr = r.read_u32::<LittleEndian>()?;
+    let flags = BTreeFlags::from(r.read_u32::<LittleEndian>()?);
+    let nr_entries = r.read_u32::<LittleEndian>()?;
+
+    Ok(NodeHeader {
+        kind,
+        seq_nr,
+        flags,
+        nr_entries,
+    })
+}
+
+pub fn read_flags(r_proxy: &ReadProxy) -> Result<BTreeFlags> {
+    let hdr = read_node_header(&mut r_proxy.r())?;
+    Ok(hdr.flags)
 }
 
 //-------------------------------------------------------------------------

@@ -1,5 +1,4 @@
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use crc32c::crc32c;
 use linked_hash_map::*;
 use std::collections::BTreeMap;
 use std::io::{self, Result};
@@ -8,49 +7,11 @@ use std::sync::{Arc, Condvar, Mutex};
 use std::thread::ThreadId;
 use thinp::io_engine::*;
 
-use crate::block_kinds::EPHEMERAL_KIND;
 use crate::byte_types::*;
 
 //-------------------------------------------------------------------------
 
 pub type MetadataBlock = u32;
-
-#[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord)]
-pub struct Kind(pub u32);
-
-// All blocks begin with this header.  The is automatically calculated by
-// the cache just before it writes the block to disk.  Similarly the checksum
-// will be verified by the cache when it reads the block from disk.
-pub struct BlockHeader {
-    pub sum: u32,
-    pub loc: u32,
-    pub kind: Kind,
-}
-
-pub const BLOCK_HEADER_SIZE: usize = 16;
-pub const BLOCK_PAYLOAD_SIZE: usize = 4096 - BLOCK_HEADER_SIZE;
-
-pub fn read_block_header<R: Read>(r: &mut R) -> Result<BlockHeader> {
-    let sum = r.read_u32::<LittleEndian>()?;
-    let loc = r.read_u32::<LittleEndian>()?;
-    let kind = Kind(r.read_u32::<LittleEndian>()?);
-    let _padding = r.read_u32::<LittleEndian>()?;
-
-    Ok(BlockHeader { loc, kind, sum })
-}
-
-pub fn write_block_header<W: Write>(w: &mut W, hdr: &BlockHeader) -> Result<()> {
-    w.write_u32::<LittleEndian>(hdr.sum)?;
-    w.write_u32::<LittleEndian>(hdr.loc)?;
-    w.write_u32::<LittleEndian>(hdr.kind.0)?;
-    w.write_u32::<LittleEndian>(0)?;
-
-    Ok(())
-}
-
-fn checksum_(data: &[u8]) -> u32 {
-    crc32c(&data[4..]) ^ 0xffffffff
-}
 
 fn fail_(msg: String) -> Result<()> {
     Err(io::Error::new(io::ErrorKind::Other, msg))
@@ -75,7 +36,6 @@ struct EntryInner {
     lock: LockState,
     dirty: bool,
     block: Block,
-    kind: Kind,
 }
 
 struct CacheEntry {
@@ -84,25 +44,23 @@ struct CacheEntry {
 }
 
 impl CacheEntry {
-    fn new_read(block: Block, kind: &Kind) -> CacheEntry {
+    fn new_read(block: Block) -> CacheEntry {
         CacheEntry {
             inner: Mutex::new(EntryInner {
                 lock: LockState::Read(1),
                 dirty: false,
                 block,
-                kind: *kind,
             }),
             cond: Condvar::new(),
         }
     }
 
-    fn new_write(block: Block, kind: &Kind) -> CacheEntry {
+    fn new_write(block: Block) -> CacheEntry {
         CacheEntry {
             inner: Mutex::new(EntryInner {
                 lock: LockState::Write(get_tid_()),
                 dirty: true,
                 block,
-                kind: *kind,
             }),
             cond: Condvar::new(),
         }
@@ -209,6 +167,7 @@ struct MetadataCacheInner {
     lru: LinkedHashMap<u32, u32>,
     cache: BTreeMap<u32, Arc<CacheEntry>>,
 }
+
 impl MetadataCacheInner {
     pub fn new(engine: Arc<dyn IoEngine>, capacity: usize) -> Result<Self> {
         let nr_blocks = engine.get_nr_blocks() as u32;
@@ -272,68 +231,13 @@ impl MetadataCacheInner {
         self.lru.remove(&loc);
     }
 
-    fn verify_(&self, block: &Block, kind: &Kind) -> Result<()> {
-        let mut r = std::io::Cursor::new(block.get_data());
-        let mut hdr = read_block_header(&mut r)?;
-
-        if hdr.loc != block.loc as u32 {
-            return fail_(format!(
-                "verify failed: block.loc {} != hdr.loc {}",
-                block.loc, hdr.loc
-            ));
-        }
-
-        if hdr.kind != *kind {
-            if hdr.kind == EPHEMERAL_KIND {
-                // FIXME: this is bad, we mutate the data in a verify fn, which is
-                // unexpected.
-                hdr.kind = *kind;
-                let mut w = std::io::Cursor::new(block.get_data());
-                write_block_header(&mut w, &hdr)?;
-            } else {
-                return fail_(format!(
-                    "verify failed: hdr.kind {} != kind {}",
-                    hdr.kind.0, kind.0
-                ));
-            }
-        }
-
-        Ok(())
-    }
-
-    fn prep_(&self, block: &Block, kind: &Kind) -> Result<()> {
-        assert!(*kind != EPHEMERAL_KIND);
-
-        let hdr = BlockHeader {
-            sum: 0,
-            loc: block.loc as u32,
-            kind: *kind,
-        };
-
-        let mut w = std::io::Cursor::new(block.get_data());
-        write_block_header(&mut w, &hdr)?;
-
-        let sum = checksum_(&block.get_data()[4..]);
-        let mut w = std::io::Cursor::new(block.get_data());
-        w.write_u32::<LittleEndian>(sum)?;
-
-        Ok(())
-    }
-
-    fn read_(&mut self, loc: u32, kind: &Kind) -> Result<Block> {
+    fn read_(&mut self, loc: u32) -> Result<Block> {
         let block = self.engine.read(loc as u64)?;
-
-        // The ephemeral kind is used by the GC, which doesn't yet
-        // know the actual kind.
-        if *kind != EPHEMERAL_KIND {
-            self.verify_(&block, kind)?;
-        }
         Ok(block)
     }
 
     fn writeback_(&self, entry: &CacheEntry) -> Result<()> {
         let inner = entry.inner.lock().unwrap();
-        self.prep_(&inner.block, &inner.kind)?;
         self.engine.write(&inner.block)?;
         Ok(())
     }
@@ -346,7 +250,7 @@ impl MetadataCacheInner {
     }
 
     // Returns true on success
-    pub fn read_lock(&mut self, loc: u32, kind: &Kind) -> Result<LockResult> {
+    pub fn read_lock(&mut self, loc: u32) -> Result<LockResult> {
         use LockResult::*;
 
         if let Some(entry) = self.cache.get_mut(&loc).cloned() {
@@ -357,7 +261,7 @@ impl MetadataCacheInner {
                 Ok(Busy(entry.clone()))
             }
         } else {
-            let entry = Arc::new(CacheEntry::new_read(self.read_(loc, kind)?, kind));
+            let entry = Arc::new(CacheEntry::new_read(self.read_(loc)?));
             self.cache.insert(loc, entry.clone());
             Ok(Locked(entry.clone()))
         }
@@ -374,16 +278,13 @@ impl MetadataCacheInner {
                 panic!("cannot gc_lock a write locked block");
             }
         } else {
-            let entry = Arc::new(CacheEntry::new_read(
-                self.read_(loc, &EPHEMERAL_KIND)?,
-                &EPHEMERAL_KIND,
-            ));
+            let entry = Arc::new(CacheEntry::new_read(self.read_(loc)?));
             self.cache.insert(loc, entry.clone());
             Ok(Locked(entry))
         }
     }
 
-    pub fn write_lock(&mut self, loc: u32, kind: &Kind) -> Result<LockResult> {
+    pub fn write_lock(&mut self, loc: u32) -> Result<LockResult> {
         use LockResult::*;
 
         if let Some(entry) = self.cache.get_mut(&loc).cloned() {
@@ -394,14 +295,14 @@ impl MetadataCacheInner {
                 Ok(Busy(entry.clone()))
             }
         } else {
-            let entry = Arc::new(CacheEntry::new_write(self.read_(loc, kind)?, kind));
+            let entry = Arc::new(CacheEntry::new_write(self.read_(loc)?));
             self.cache.insert(loc, entry.clone());
             Ok(Locked(entry.clone()))
         }
     }
 
     /// Write lock and zero the data (avoids reading the block)
-    pub fn zero_lock(&mut self, loc: u32, kind: &Kind) -> Result<LockResult> {
+    pub fn zero_lock(&mut self, loc: u32) -> Result<LockResult> {
         use LockResult::*;
 
         if let Some(entry) = self.cache.get_mut(&loc).cloned() {
@@ -418,7 +319,7 @@ impl MetadataCacheInner {
             }
         } else {
             let block = Block::zeroed(loc as u64);
-            let entry = Arc::new(CacheEntry::new_write(block, kind));
+            let entry = Arc::new(CacheEntry::new_write(block));
             self.cache.insert(loc, entry.clone());
             Ok(Locked(entry.clone()))
         }
@@ -584,13 +485,13 @@ impl MetadataCache {
         inner.residency()
     }
 
-    pub fn read_lock(self: &Arc<Self>, loc: u32, kind: &Kind) -> Result<ReadProxy> {
+    pub fn read_lock(self: &Arc<Self>, loc: u32) -> Result<ReadProxy> {
         use LockResult::*;
 
         let mut inner = self.inner.lock().unwrap();
 
         loop {
-            match inner.read_lock(loc, kind)? {
+            match inner.read_lock(loc)? {
                 Locked(entry) => {
                     let proxy_ = ReadProxy_ {
                         loc,
@@ -638,13 +539,13 @@ impl MetadataCache {
         }
     }
 
-    pub fn write_lock(self: &Arc<Self>, loc: u32, kind: &Kind) -> Result<WriteProxy> {
+    pub fn write_lock(self: &Arc<Self>, loc: u32) -> Result<WriteProxy> {
         use LockResult::*;
 
         let mut inner = self.inner.lock().unwrap();
 
         loop {
-            match inner.write_lock(loc, kind)? {
+            match inner.write_lock(loc)? {
                 Locked(entry) => {
                     let proxy_ = WriteProxy_ {
                         loc,
@@ -666,13 +567,13 @@ impl MetadataCache {
     }
 
     /// Write lock and zero the data (avoids reading the block)
-    pub fn zero_lock(self: &Arc<Self>, loc: u32, kind: &Kind) -> Result<WriteProxy> {
+    pub fn zero_lock(self: &Arc<Self>, loc: u32) -> Result<WriteProxy> {
         use LockResult::*;
 
         let mut inner = self.inner.lock().unwrap();
 
         loop {
-            match inner.zero_lock(loc, kind)? {
+            match inner.zero_lock(loc)? {
                 Locked(entry) => {
                     let proxy_ = WriteProxy_ {
                         loc,
@@ -735,7 +636,7 @@ mod test {
     }
 
     fn verify(data: &[u8], byte: u8) {
-        for b in data.iter().skip(BLOCK_HEADER_SIZE) {
+        for b in data.iter() {
             assert!(*b == byte);
         }
     }
@@ -755,13 +656,13 @@ mod test {
     fn test_new_block() -> Result<()> {
         let engine = mk_engine(16);
         let cache = Arc::new(MetadataCache::new(engine, 16)?);
-        let mut wp = cache.zero_lock(0, &Kind(17))?;
+        let mut wp = cache.zero_lock(0)?;
         stamp(wp.rw(), 21)?;
         drop(wp);
 
         cache.flush()?;
 
-        let rp = cache.read_lock(0, &Kind(17))?;
+        let rp = cache.read_lock(0)?;
 
         let data = rp.r();
         verify(data, 21);
@@ -779,7 +680,7 @@ mod test {
             let cache = Arc::new(MetadataCache::new(engine.clone(), CACHE_SIZE)?);
 
             for i in 0..nr_blocks {
-                let mut wp = cache.zero_lock(i, &Kind(17))?;
+                let mut wp = cache.zero_lock(i)?;
                 stamp(wp.rw(), i as u8)?;
                 ensure!(cache.residency() <= CACHE_SIZE);
             }
@@ -789,7 +690,7 @@ mod test {
             let cache = Arc::new(MetadataCache::new(engine, 16)?);
 
             for i in 0..nr_blocks {
-                let rp = cache.read_lock(i, &Kind(17))?;
+                let rp = cache.read_lock(i)?;
                 verify(rp.r(), i as u8);
             }
         }
@@ -807,7 +708,7 @@ mod test {
             let cache = Arc::new(MetadataCache::new(engine.clone(), CACHE_SIZE)?);
 
             for i in 0..nr_blocks {
-                let mut wp = cache.zero_lock(i, &Kind(17))?;
+                let mut wp = cache.zero_lock(i)?;
                 stamp(wp.rw(), i as u8)?;
                 ensure!(cache.residency() <= CACHE_SIZE);
             }
@@ -818,7 +719,7 @@ mod test {
             let cache = Arc::new(MetadataCache::new(engine.clone(), CACHE_SIZE)?);
 
             for i in 0..nr_blocks {
-                let mut wp = cache.zero_lock(i, &Kind(17))?;
+                let mut wp = cache.zero_lock(i)?;
                 stamp(wp.rw(), (i * 3) as u8)?;
                 ensure!(cache.residency() <= CACHE_SIZE);
             }
@@ -828,7 +729,7 @@ mod test {
             let cache = Arc::new(MetadataCache::new(engine, 16)?);
 
             for i in 0..nr_blocks {
-                let rp = cache.read_lock(i, &Kind(17))?;
+                let rp = cache.read_lock(i)?;
                 verify(rp.r(), (i * 3) as u8);
             }
         }
@@ -841,10 +742,10 @@ mod test {
         let engine = mk_engine(16);
         let cache = Arc::new(MetadataCache::new(engine.clone(), 16)?);
         {
-            cache.zero_lock(0, &Kind(17))?;
+            cache.zero_lock(0)?;
         }
         {
-            cache.zero_lock(0, &Kind(17))?;
+            cache.zero_lock(0)?;
         }
         Ok(())
     }

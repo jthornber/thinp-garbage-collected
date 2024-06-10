@@ -32,8 +32,8 @@ impl Fixture {
         })
     }
 
-    fn alloc(&mut self, kind: &Kind) -> Result<WriteProxy> {
-        let b = self.cache.zero_lock(self.alloc_begin, kind)?;
+    fn alloc(&mut self) -> Result<WriteProxy> {
+        let b = self.cache.zero_lock(self.alloc_begin)?;
         self.alloc_begin += 1;
         Ok(b)
     }
@@ -329,7 +329,7 @@ fn reopen() -> Result<()> {
     bits.shuffle(&mut rng);
 
     {
-        let sb = fix.alloc(&SUPERBLOCK_KIND)?;
+        let mut sb = fix.alloc()?;
 
         let mut bitset = fix.create_bitset(nr_bits)?;
         bits[..nr_enabled as usize]
@@ -337,16 +337,14 @@ fn reopen() -> Result<()> {
             .try_for_each(|&i| bitset.set(i))?;
 
         let root = bitset.get_root()?;
-        let (_, mut sb_data) = sb.split_at(BLOCK_HEADER_SIZE);
-        root.pack(&mut sb_data.rw())?;
+        root.pack(&mut sb.rw())?;
     }
 
     fix.cache.flush()?;
 
     {
-        let sb = fix.cache.read_lock(0, &SUPERBLOCK_KIND)?;
-        let (_, sb_data) = sb.split_at(BLOCK_HEADER_SIZE);
-        let root = BitsetRoot::unpack(&mut sb_data.r())?;
+        let sb = fix.cache.read_lock(0)?;
+        let root = BitsetRoot::unpack(&mut sb.r())?;
 
         let bitset = Bitset::open(fix.cache.clone(), root)?;
         ensure!(bitset.len() == nr_bits);

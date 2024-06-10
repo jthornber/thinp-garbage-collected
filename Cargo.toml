@@ -29,3 +29,5 @@ tracing-subscriber = "0.3"
 zstd = "0.13"
 mlua = { version = "0.9.8", features = ["lua54", "vendored"] }
 num_enum = "0.7.2"
+rio = "0.9.4"
+safemem = "0.3.3"

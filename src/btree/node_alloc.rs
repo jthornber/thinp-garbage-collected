@@ -2,9 +2,7 @@ use anyhow::Result;
 use std::sync::Arc;
 
 use crate::block_cache::*;
-use crate::block_kinds::*;
 use crate::btree::node::*;
-use crate::byte_types::*;
 use crate::packed_array::*;
 use crate::transaction_manager::*;
 
@@ -21,19 +19,19 @@ impl NodeAlloc {
     }
 
     pub fn new_block(&mut self) -> Result<WriteProxy> {
-        self.tm.new_block(self.context, &BNODE_KIND)
+        self.tm.new_block(self.context)
     }
 
     pub fn is_internal(&mut self, n_ptr: NodePtr) -> Result<bool> {
-        let b = self.tm.read(n_ptr.loc, &BNODE_KIND)?;
-        Ok(read_flags(b.r())? == BTreeFlags::Internal)
+        let b = self.tm.read(n_ptr.loc)?;
+        Ok(read_flags(&b)? == BTreeFlags::Internal)
     }
 
     pub fn shadow<V: Serializable, Node: NodeW<V, WriteProxy>>(
         &mut self,
         n_ptr: NodePtr,
     ) -> Result<Node> {
-        let w_proxy = self.tm.shadow(self.context, n_ptr.loc, &BNODE_KIND)?;
+        let w_proxy = self.tm.shadow(self.context, n_ptr.loc)?;
         Node::open(w_proxy.loc(), w_proxy)
     }
 }

@@ -1,39 +1,13 @@
 use anyhow::Result;
-use byteorder::{LittleEndian, WriteBytesExt};
-use std::io::Write;
 
 use crate::block_cache::*;
-use crate::block_kinds::*;
 use crate::btree::node::*;
 use crate::byte_types::*;
 use crate::packed_array::*;
 
 //-------------------------------------------------------------------------
 
-pub const NODE_HEADER_SIZE: usize = 16;
-
-// FIXME: we can pack this more
-pub struct NodeHeader {
-    seq_nr: u32,
-    flags: u32,
-    nr_entries: u32,
-    value_size: u16,
-}
-
-/// Writes the header of a node to a writer.
-pub fn write_node_header<W: Write>(w: &mut W, hdr: NodeHeader) -> Result<()> {
-    w.write_u32::<LittleEndian>(hdr.seq_nr)?;
-    w.write_u32::<LittleEndian>(hdr.flags)?;
-    w.write_u32::<LittleEndian>(hdr.nr_entries)?;
-    w.write_u16::<LittleEndian>(hdr.value_size)?;
-
-    // Pad out to a 64bit boundary
-    w.write_u16::<LittleEndian>(0)?;
-
-    Ok(())
-}
-
-//-------------------------------------------------------------------------
+pub const SIMPLE_NODE_KIND: u32 = 0;
 
 #[allow(dead_code)]
 pub struct SimpleNode<V: Serializable, Data: Readable> {
@@ -41,10 +15,10 @@ pub struct SimpleNode<V: Serializable, Data: Readable> {
     // This doesn't get written to disk.
     pub loc: u32,
 
+    pub kind: U32<Data>,
     pub seq_nr: U32<Data>,
     pub flags: U32<Data>,
     pub nr_entries: U32<Data>,
-    pub value_size: U16<Data>,
 
     pub keys: PArray<u32, Data>,
     pub values: PArray<V, Data>,
@@ -52,35 +26,32 @@ pub struct SimpleNode<V: Serializable, Data: Readable> {
 
 impl<V: Serializable, Data: Readable> SimpleNode<V, Data> {
     pub fn new(loc: u32, data: Data) -> Self {
-        let (_, data) = data.split_at(BLOCK_HEADER_SIZE);
+        let (kind, data) = data.split_at(4);
         let (seq_nr, data) = data.split_at(4);
         let (flags, data) = data.split_at(4);
         let (nr_entries, data) = data.split_at(4);
-        let (value_size, data) = data.split_at(2);
-        let (_padding, data) = data.split_at(6);
         let (keys, values) = data.split_at(Self::max_entries() * std::mem::size_of::<u32>());
 
+        let kind = U32::new(kind);
         let seq_nr = U32::new(seq_nr);
         let flags = U32::new(flags);
         let nr_entries = U32::new(nr_entries);
-        let value_size = U16::new(value_size);
         let keys = PArray::new(keys, nr_entries.get() as usize);
         let values = PArray::new(values, nr_entries.get() as usize);
 
         Self {
             loc,
+            kind,
             seq_nr,
             flags,
             nr_entries,
-            value_size,
             keys,
             values,
         }
     }
 
     fn max_entries() -> usize {
-        (BLOCK_PAYLOAD_SIZE - NODE_HEADER_SIZE)
-            / (std::mem::size_of::<u32>() + std::mem::size_of::<V>())
+        (NODE_SIZE - NODE_HEADER_SIZE) / (std::mem::size_of::<u32>() + std::mem::size_of::<V>())
     }
 
     pub fn has_space(&self, count: usize) -> bool {
@@ -144,26 +115,18 @@ impl<V: Serializable, Data: Writeable> NodeW<V, Data> for SimpleNode<V, Data> {
     fn init(loc: MetadataBlock, mut data: Data, is_leaf: bool) -> Result<()> {
         // initialise the block
         let mut w = std::io::Cursor::new(data.rw());
-        let hdr = BlockHeader {
-            loc,
-            kind: BNODE_KIND,
-            sum: 0,
-        };
-        write_block_header(&mut w, &hdr)?;
-
-        write_node_header(
-            &mut w,
-            NodeHeader {
-                seq_nr: 0,
-                flags: if is_leaf {
-                    BTreeFlags::Leaf
-                } else {
-                    BTreeFlags::Internal
-                } as u32,
-                nr_entries: 0,
-                value_size: V::packed_len() as u16,
+        let hdr = NodeHeader {
+            kind: SIMPLE_NODE_KIND,
+            seq_nr: 0,
+            flags: if is_leaf {
+                BTreeFlags::Leaf
+            } else {
+                BTreeFlags::Internal
             },
-        )?;
+            nr_entries: 0,
+        };
+
+        write_node_header(&mut w, &hdr)?;
 
         Ok(())
     }

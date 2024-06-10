@@ -691,6 +691,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "adad44e29e4c806119491a7f06f03de4d1af22c3a680dd47f1e6e179439d1f56"
 
 [[package]]
+name = "rio"
+version = "0.9.4"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "9e98c25665909853c07874301124482754434520ab572ac6a22e90366de6685b"
+dependencies = [
+ "libc",
+]
+
+[[package]]
 name = "roaring"
 version = "0.10.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -866,7 +875,9 @@ dependencies = [
  "num_enum",
  "rand",
  "rand_chacha",
+ "rio",
  "roaring",
+ "safemem",
  "test-log",
  "thinp",
  "threadpool",

@@ -3,7 +3,6 @@ use std::collections::BTreeSet;
 
 use crate::block_allocator::*;
 use crate::block_cache::*;
-use crate::block_kinds::*;
 use crate::byte_types::*;
 use crate::scope_id::*;
 
@@ -29,73 +28,61 @@ struct TransactionManager_ {
     cache: Arc<MetadataCache>,
     pub scopes: Arc<Mutex<ScopeRegister>>,
     shadows: BTreeSet<(ReferenceContext, MetadataBlock)>,
-
-    // While a transaction is in progress we must keep the superblock
-    // locked to prevent an accidental commit.
-    superblock: Option<WriteProxy>,
 }
-
-const SUPERBLOCK_LOC: MetadataBlock = 0;
 
 impl TransactionManager_ {
     fn new(allocator: Arc<Mutex<BlockAllocator>>, cache: Arc<MetadataCache>) -> Self {
-        let superblock = cache.zero_lock(SUPERBLOCK_LOC, &SUPERBLOCK_KIND).unwrap();
         Self {
             allocator,
             cache,
             scopes: Arc::new(Mutex::new(ScopeRegister::default())),
             shadows: BTreeSet::new(),
-            superblock: Some(superblock),
         }
     }
 
-    fn commit(&mut self, roots: &[MetadataBlock]) -> Result<()> {
-        {
-            let mut allocator = self.allocator.lock().unwrap();
+    fn commit(&mut self, _roots: &[MetadataBlock]) -> Result<()> {
+        todo!();
 
-            // quiesce the gc
-            allocator.gc_quiesce();
-            allocator.set_roots(roots);
-        }
+        /*
+                {
+                    let mut allocator = self.allocator.lock().unwrap();
 
-        // FIXME: check that only the superblock is held
-        self.cache.flush()?;
+                    // quiesce the gc
+                    allocator.gc_quiesce();
+                    allocator.set_roots(roots);
+                }
 
-        // writeback the superblock
-        self.superblock = None;
-        self.cache.flush()?;
+                // FIXME: check that only the superblock is held
+                self.cache.flush()?;
 
-        // set new roots ready for next gc
-        // FIXME: finish
+                // writeback the superblock
+                self.superblock = None;
+                self.cache.flush()?;
 
-        // get superblock for next transaction
-        self.superblock = Some(self.cache.write_lock(SUPERBLOCK_LOC, &SUPERBLOCK_KIND)?);
+                // set new roots ready for next gc
+                // FIXME: finish
 
-        // clear shadows
-        self.shadows.clear();
+                // get superblock for next transaction
+                self.superblock = Some(self.cache.write_lock(SUPERBLOCK_LOC, &SUPERBLOCK_KIND)?);
 
-        // resume the gc
-        self.allocator.lock().unwrap().gc_resume();
+                // clear shadows
+                self.shadows.clear();
 
-        Ok(())
+                // resume the gc
+                self.allocator.lock().unwrap().gc_resume();
+
+                Ok(())
+        */
     }
 
-    fn abort(&mut self) {
-        todo!()
-    }
-
-    fn superblock(&mut self) -> &WriteProxy {
-        self.superblock.as_ref().unwrap()
-    }
-
-    fn read(&self, loc: MetadataBlock, kind: &Kind) -> Result<ReadProxy> {
-        let b = self.cache.read_lock(loc, kind)?;
+    fn read(&self, loc: MetadataBlock) -> Result<ReadProxy> {
+        let b = self.cache.read_lock(loc)?;
         Ok(b)
     }
 
-    fn new_block(&mut self, context: ReferenceContext, kind: &Kind) -> Result<WriteProxy> {
+    fn new_block(&mut self, context: ReferenceContext) -> Result<WriteProxy> {
         if let Some(loc) = self.allocator.lock().unwrap().allocate_metadata()? {
-            let b = self.cache.zero_lock(loc, kind)?;
+            let b = self.cache.zero_lock(loc)?;
             self.shadows.insert((context, loc));
             Ok(b)
         } else {
@@ -119,22 +106,18 @@ impl TransactionManager_ {
     /// a block from the shadow set.  But this won't work because we need to start
     /// calling inc_ref() for children blocks if we ever shadow that block again.
     ///
-    fn shadow(
-        &mut self,
-        context: ReferenceContext,
-        old_loc: MetadataBlock,
-        kind: &Kind,
-    ) -> Result<WriteProxy> {
+    fn shadow(&mut self, context: ReferenceContext, old_loc: MetadataBlock) -> Result<WriteProxy> {
         if self.shadows.contains(&(context, old_loc)) {
-            Ok(self.cache.write_lock(old_loc, kind)?)
+            Ok(self.cache.write_lock(old_loc)?)
         } else if let Some(loc) = self.allocator.lock().unwrap().allocate_metadata()? {
             eprintln!("shadowing {}", old_loc);
-            let old = self.cache.read_lock(old_loc, kind)?;
-            let mut new = self.cache.zero_lock(loc, kind)?;
+            let old = self.cache.read_lock(old_loc)?;
+            let mut new = self.cache.zero_lock(loc)?;
             self.shadows.insert((context, loc));
 
             // We're careful not to touch the block header
-            new.rw()[BLOCK_HEADER_SIZE..].copy_from_slice(&old.r()[BLOCK_HEADER_SIZE..]);
+            // FIXME: I don't think we need the subscripts?
+            new.rw()[0..].copy_from_slice(&old.r()[0..]);
             Ok(new)
         } else {
             Err(anyhow::anyhow!("out of metadata blocks"))
@@ -166,34 +149,19 @@ impl TransactionManager {
         inner.commit(roots)
     }
 
-    pub fn abort(&self) {
-        let mut inner = self.inner.lock().unwrap();
-        inner.abort()
-    }
-
-    pub fn superblock(&self) -> WriteProxy {
-        let mut inner = self.inner.lock().unwrap();
-        inner.superblock().clone()
-    }
-
-    pub fn read(&self, loc: MetadataBlock, kind: &Kind) -> Result<ReadProxy> {
+    pub fn read(&self, loc: MetadataBlock) -> Result<ReadProxy> {
         let inner = self.inner.lock().unwrap();
-        inner.read(loc, kind)
+        inner.read(loc)
     }
 
-    pub fn new_block(&self, context: ReferenceContext, kind: &Kind) -> Result<WriteProxy> {
+    pub fn new_block(&self, context: ReferenceContext) -> Result<WriteProxy> {
         let mut inner = self.inner.lock().unwrap();
-        inner.new_block(context, kind)
+        inner.new_block(context)
     }
 
-    pub fn shadow(
-        &self,
-        context: ReferenceContext,
-        loc: MetadataBlock,
-        kind: &Kind,
-    ) -> Result<WriteProxy> {
+    pub fn shadow(&self, context: ReferenceContext, loc: MetadataBlock) -> Result<WriteProxy> {
         let mut inner = self.inner.lock().unwrap();
-        inner.shadow(context, loc, kind)
+        inner.shadow(context, loc)
     }
 }
 

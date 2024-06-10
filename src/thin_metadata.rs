@@ -84,6 +84,10 @@ impl Pool {
     }
 
     pub fn create_thin(&mut self, _size: VBlock) -> Result<ThinID> {
+        // create new btree
+        // Add thin_info to btree
+        // add journal entry
+        // sync journal
         todo!()
     }
 

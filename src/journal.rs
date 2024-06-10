@@ -380,14 +380,14 @@ impl Journal {
 
     /// Node ptr refers to the node before the op, after the op
     /// the seq_nr will be one higher.
-    pub fn add_op(&mut self, n: &NodePtr, op: &Entry) -> Result<()> {
+    pub fn add_node_op(&mut self, n: &NodePtr, op: &Entry) -> Result<()> {
         self.nodes
             .entry(n.loc)
             .and_modify(|ops| ops.push(op.clone()));
         Ok(())
     }
 
-    pub fn commit(&mut self) -> Result<()> {
+    pub fn sync(&mut self) -> Result<()> {
         let mut w: Vec<u8> = Vec::new();
 
         let mut nodes = BTreeMap::new();

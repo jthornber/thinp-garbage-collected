@@ -19,7 +19,7 @@ use crate::transaction_manager::*;
 pub struct BTree<V: Serializable + Copy, INodeR, INodeW, LNodeR, LNodeW> {
     tm: Arc<TransactionManager>,
     context: ReferenceContext,
-    root: u32,
+    root: NodePtr,
     phantom_v: std::marker::PhantomData<V>,
     phantom_inode_r: std::marker::PhantomData<INodeR>,
     phantom_inode_w: std::marker::PhantomData<INodeW>,
@@ -29,13 +29,17 @@ pub struct BTree<V: Serializable + Copy, INodeR, INodeW, LNodeR, LNodeW> {
 
 impl<
         V: Serializable + Copy,
-        INodeR: NodeR<MetadataBlock, ReadProxy>,
-        INodeW: NodeW<MetadataBlock, WriteProxy>,
+        INodeR: NodeR<NodePtr, ReadProxy>,
+        INodeW: NodeW<NodePtr, WriteProxy>,
         LNodeR: NodeR<V, ReadProxy>,
         LNodeW: NodeW<V, WriteProxy>,
     > BTree<V, INodeR, INodeW, LNodeR, LNodeW>
 {
-    pub fn open_tree(tm: Arc<TransactionManager>, context: ReferenceContext, root: u32) -> Self {
+    pub fn open_tree(
+        tm: Arc<TransactionManager>,
+        context: ReferenceContext,
+        root: NodePtr,
+    ) -> Self {
         Self {
             tm,
             context,
@@ -49,12 +53,12 @@ impl<
     }
 
     pub fn empty_tree(tm: Arc<TransactionManager>, context: ReferenceContext) -> Result<Self> {
-        let root = {
-            let root = tm.new_block(context, &BNODE_KIND)?;
-            let loc = root.loc();
-            LNodeW::init(loc, root, true)?;
-            loc
+        let b = tm.new_block(context, &BNODE_KIND)?;
+        let root = NodePtr {
+            loc: b.loc(),
+            seq_nr: 0,
         };
+        LNodeW::init(root.loc, b, true)?;
 
         Ok(Self {
             tm,
@@ -81,7 +85,7 @@ impl<
         }
     }
 
-    pub fn root(&self) -> u32 {
+    pub fn root(&self) -> NodePtr {
         self.root
     }
 
@@ -190,17 +194,17 @@ impl<
 
     fn check_(
         &self,
-        loc: u32,
+        n_ptr: NodePtr,
         key_min: u32,
         key_max: Option<u32>,
         seen: &mut BTreeSet<u32>,
     ) -> Result<u32> {
         let mut total = 0;
 
-        ensure!(!seen.contains(&loc));
-        seen.insert(loc);
+        ensure!(!seen.contains(&n_ptr.loc));
+        seen.insert(n_ptr.loc);
 
-        let r_proxy = self.tm.read(loc, &BNODE_KIND).unwrap();
+        let r_proxy = self.tm.read(n_ptr.loc, &BNODE_KIND).unwrap();
         let flags = read_flags(r_proxy.r())?;
 
         match flags {
@@ -246,13 +250,13 @@ pub fn btree_refs(r_proxy: &ReadProxy, queue: &mut VecDeque<BlockRef>) {
         BTreeFlags::Internal => {
             // FIXME: hard coded for now.  No point fixing this until we've switched
             // to log based transactions.
-            let node = crate::btree::simple_node::SimpleNode::<MetadataBlock, ReadProxy>::open(
+            let node = crate::btree::simple_node::SimpleNode::<NodePtr, ReadProxy>::open(
                 r_proxy.loc(),
                 r_proxy.clone(),
             )
             .unwrap();
             for i in 0..node.nr_entries.get() {
-                queue.push_back(BlockRef::Metadata(node.values.get(i as usize)));
+                queue.push_back(BlockRef::Metadata(node.values.get(i as usize).loc));
             }
         }
         BTreeFlags::Leaf => {
@@ -319,8 +323,8 @@ mod test {
 
     type TestTree = BTree<
         Value,
-        SimpleNode<MetadataBlock, ReadProxy>,
-        SimpleNode<MetadataBlock, WriteProxy>,
+        SimpleNode<NodePtr, ReadProxy>,
+        SimpleNode<NodePtr, WriteProxy>,
         SimpleNode<Value, ReadProxy>,
         SimpleNode<Value, WriteProxy>,
     >;
@@ -378,7 +382,7 @@ mod test {
         }
 
         fn commit(&mut self) -> Result<()> {
-            let roots = vec![self.tree.root()];
+            let roots = vec![self.tree.root().loc];
             self.tm.commit(&roots)
         }
     }

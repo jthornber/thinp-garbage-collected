@@ -9,16 +9,12 @@ use crate::transaction_manager::*;
 
 //-------------------------------------------------------------------------
 
-pub fn lookup<
-    V: Serializable,
-    INode: NodeR<MetadataBlock, ReadProxy>,
-    LNode: NodeR<V, ReadProxy>,
->(
+pub fn lookup<V: Serializable, INode: NodeR<NodePtr, ReadProxy>, LNode: NodeR<V, ReadProxy>>(
     tm: &TransactionManager,
-    root: MetadataBlock,
+    root: NodePtr,
     key: u32,
 ) -> Result<Option<V>> {
-    let mut r_proxy = tm.read(root, &BNODE_KIND)?;
+    let mut r_proxy = tm.read(root.loc, &BNODE_KIND)?;
 
     loop {
         let flags = read_flags(r_proxy.r())?;
@@ -33,7 +29,7 @@ pub fn lookup<
                 }
 
                 let child = node.get_value(idx as usize);
-                r_proxy = tm.read(child, &BNODE_KIND)?;
+                r_proxy = tm.read(child.loc, &BNODE_KIND)?;
             }
             BTreeFlags::Leaf => {
                 let node = LNode::open(r_proxy.loc(), r_proxy)?;
@@ -161,23 +157,19 @@ fn get_prog_below<V: Serializable, N: NodeR<V, ReadProxy>>(node: &N, key: u32) -
     prog
 }
 
-fn select_above<
-    V: Serializable,
-    INode: NodeR<MetadataBlock, ReadProxy>,
-    LNode: NodeR<V, ReadProxy>,
->(
+fn select_above<V: Serializable, INode: NodeR<NodePtr, ReadProxy>, LNode: NodeR<V, ReadProxy>>(
     tm: &TransactionManager,
-    loc: MetadataBlock,
+    n_ptr: NodePtr,
     key: u32,
     val_above: &ValFn<V>,
     results: &mut Vec<(u32, V)>,
 ) -> Result<()> {
     use NodeOp::*;
 
-    let r_proxy = tm.read(loc, &BNODE_KIND)?;
+    let r_proxy = tm.read(n_ptr.loc, &BNODE_KIND)?;
     match read_flags(r_proxy.r())? {
         BTreeFlags::Internal => {
-            let node = INode::open(loc, r_proxy)?;
+            let node = INode::open(n_ptr.loc, r_proxy)?;
 
             for op in get_prog_above(&node, key) {
                 match op {
@@ -200,7 +192,7 @@ fn select_above<
             }
         }
         BTreeFlags::Leaf => {
-            let node = LNode::open(loc, r_proxy)?;
+            let node = LNode::open(n_ptr.loc, r_proxy)?;
             for op in get_prog_above::<V, LNode>(&node, key) {
                 match op {
                     AboveAndBelow(_) => {
@@ -224,13 +216,9 @@ fn select_above<
     Ok(())
 }
 
-fn select_below<
-    V: Serializable,
-    INode: NodeR<MetadataBlock, ReadProxy>,
-    LNode: NodeR<V, ReadProxy>,
->(
+fn select_below<V: Serializable, INode: NodeR<NodePtr, ReadProxy>, LNode: NodeR<V, ReadProxy>>(
     tm: &TransactionManager,
-    loc: MetadataBlock,
+    n_ptr: NodePtr,
     key: u32,
     val_below: &ValFn<V>,
     results: &mut Vec<(u32, V)>,
@@ -238,10 +226,10 @@ fn select_below<
     use BTreeFlags::*;
     use NodeOp::*;
 
-    let r_proxy = tm.read(loc, &BNODE_KIND)?;
+    let r_proxy = tm.read(n_ptr.loc, &BNODE_KIND)?;
     match read_flags(r_proxy.r())? {
         Internal => {
-            let node = INode::open(loc, r_proxy)?;
+            let node = INode::open(n_ptr.loc, r_proxy)?;
 
             for op in get_prog_below(&node, key) {
                 match op {
@@ -264,7 +252,7 @@ fn select_below<
             }
         }
         Leaf => {
-            let node = LNode::open(loc, r_proxy)?;
+            let node = LNode::open(n_ptr.loc, r_proxy)?;
             for op in get_prog_below::<V, LNode>(&node, key) {
                 match op {
                     AboveAndBelow(_) => {
@@ -288,27 +276,23 @@ fn select_below<
     Ok(())
 }
 
-fn select_all<
-    V: Serializable,
-    INode: NodeR<MetadataBlock, ReadProxy>,
-    LNode: NodeR<V, ReadProxy>,
->(
+fn select_all<V: Serializable, INode: NodeR<NodePtr, ReadProxy>, LNode: NodeR<V, ReadProxy>>(
     tm: &TransactionManager,
-    loc: MetadataBlock,
+    n_ptr: NodePtr,
     results: &mut Vec<(u32, V)>,
 ) -> Result<()> {
     use BTreeFlags::*;
 
-    let r_proxy = tm.read(loc, &BNODE_KIND)?;
+    let r_proxy = tm.read(n_ptr.loc, &BNODE_KIND)?;
     match read_flags(r_proxy.r())? {
         Internal => {
-            let node = INode::open(loc, r_proxy)?;
+            let node = INode::open(n_ptr.loc, r_proxy)?;
             for i in 0..node.nr_entries() {
                 select_all::<V, INode, LNode>(tm, node.get_value(i), results)?;
             }
         }
         Leaf => {
-            let node = LNode::open(loc, r_proxy)?;
+            let node = LNode::open(n_ptr.loc, r_proxy)?;
             for i in 0..node.nr_entries() {
                 results.push((node.get_key(i), node.get_value(i)));
             }
@@ -319,11 +303,11 @@ fn select_all<
 
 fn select_above_below<
     V: Serializable,
-    INode: NodeR<MetadataBlock, ReadProxy>,
+    INode: NodeR<NodePtr, ReadProxy>,
     LNode: NodeR<V, ReadProxy>,
 >(
     tm: &TransactionManager,
-    loc: MetadataBlock,
+    n_ptr: NodePtr,
     key_begin: u32,
     key_end: u32,
     val_below: &ValFn<V>,
@@ -333,10 +317,10 @@ fn select_above_below<
     use BTreeFlags::*;
     use NodeOp::*;
 
-    let r_proxy = tm.read(loc, &BNODE_KIND)?;
+    let r_proxy = tm.read(n_ptr.loc, &BNODE_KIND)?;
     match read_flags(r_proxy.r())? {
         Internal => {
-            let node = INode::open(loc, r_proxy)?;
+            let node = INode::open(n_ptr.loc, r_proxy)?;
             for op in get_prog(&node, key_begin, key_end) {
                 match op {
                     AboveAndBelow(idx) => {
@@ -375,7 +359,7 @@ fn select_above_below<
             }
         }
         Leaf => {
-            let node = LNode::open(loc, r_proxy)?;
+            let node = LNode::open(n_ptr.loc, r_proxy)?;
             for op in get_prog::<V, LNode>(&node, key_begin, key_end) {
                 match op {
                     AboveAndBelow(idx) => {
@@ -411,11 +395,11 @@ fn select_above_below<
 // though.
 pub fn lookup_range<
     V: Serializable,
-    INode: NodeR<MetadataBlock, ReadProxy>,
+    INode: NodeR<NodePtr, ReadProxy>,
     LNode: NodeR<V, ReadProxy>,
 >(
     tm: &TransactionManager,
-    root: MetadataBlock,
+    root: NodePtr,
     key_begin: u32,
     key_end: u32,
     val_below: &ValFn<V>,
@@ -463,8 +447,11 @@ mod tests {
             unimplemented!();
         }
 
-        fn loc(&self) -> MetadataBlock {
-            self.loc
+        fn n_ptr(&self) -> NodePtr {
+            NodePtr {
+                loc: self.loc,
+                seq_nr: 0,
+            }
         }
 
         fn nr_entries(&self) -> usize {

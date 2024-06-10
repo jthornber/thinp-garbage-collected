@@ -24,16 +24,16 @@ impl NodeAlloc {
         self.tm.new_block(self.context, &BNODE_KIND)
     }
 
-    pub fn is_internal(&mut self, loc: MetadataBlock) -> Result<bool> {
-        let b = self.tm.read(loc, &BNODE_KIND)?;
+    pub fn is_internal(&mut self, n_ptr: NodePtr) -> Result<bool> {
+        let b = self.tm.read(n_ptr.loc, &BNODE_KIND)?;
         Ok(read_flags(b.r())? == BTreeFlags::Internal)
     }
 
     pub fn shadow<V: Serializable, Node: NodeW<V, WriteProxy>>(
         &mut self,
-        loc: MetadataBlock,
+        n_ptr: NodePtr,
     ) -> Result<Node> {
-        let w_proxy = self.tm.shadow(self.context, loc, &BNODE_KIND)?;
+        let w_proxy = self.tm.shadow(self.context, n_ptr.loc, &BNODE_KIND)?;
         Node::open(w_proxy.loc(), w_proxy)
     }
 }
@@ -99,7 +99,7 @@ pub fn ensure_space<
 }
 
 // Call this when recursing back up the spine
-pub fn node_insert_result<Node: NodeW<MetadataBlock, WriteProxy>>(
+pub fn node_insert_result<Node: NodeW<NodePtr, WriteProxy>>(
     alloc: &mut NodeAlloc,
     node: &mut Node,
     idx: usize,
@@ -114,15 +114,15 @@ pub fn node_insert_result<Node: NodeW<MetadataBlock, WriteProxy>>(
         }
         Single(NodeInfo {
             key_min: Some(new_key),
-            loc,
+            n_ptr,
         }) => {
-            node.overwrite(idx, *new_key, loc);
+            node.overwrite(idx, *new_key, n_ptr);
             Ok(NodeResult::single(node))
         }
         Pair(left, right) => {
-            node.overwrite(idx, left.key_min.unwrap(), &left.loc);
+            node.overwrite(idx, left.key_min.unwrap(), &left.n_ptr);
             ensure_space(alloc, node, idx, |node, idx| {
-                node.insert(idx + 1, right.key_min.unwrap(), &right.loc)
+                node.insert(idx + 1, right.key_min.unwrap(), &right.n_ptr)
             })
         }
     }

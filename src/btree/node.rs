@@ -1,5 +1,6 @@
 use anyhow::Result;
-use byteorder::{LittleEndian, ReadBytesExt};
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use std::io::{self, Read, Write};
 
 use crate::block_cache::*;
 use crate::byte_types::*;
@@ -28,6 +29,7 @@ impl From<u32> for BTreeFlags {
 // the appropriate type.
 pub fn read_flags(r: &[u8]) -> Result<BTreeFlags> {
     let mut r = &r[BLOCK_HEADER_SIZE..];
+    let _seq_nr = r.read_u32::<LittleEndian>()?;
     let flags = r.read_u32::<LittleEndian>()?;
     Ok(BTreeFlags::from(flags))
 }
@@ -36,24 +38,42 @@ pub fn read_flags(r: &[u8]) -> Result<BTreeFlags> {
 
 pub type SequenceNr = u32;
 
-#[derive(Clone, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub struct NodePtr {
     pub loc: MetadataBlock,
     pub seq_nr: SequenceNr,
+}
+
+impl Serializable for NodePtr {
+    fn packed_len() -> usize {
+        8
+    }
+
+    fn pack<W: Write>(&self, w: &mut W) -> io::Result<()> {
+        w.write_u32::<LittleEndian>(self.loc)?;
+        w.write_u32::<LittleEndian>(self.seq_nr)?;
+        Ok(())
+    }
+
+    fn unpack<R: Read>(r: &mut R) -> io::Result<Self> {
+        let loc = r.read_u32::<LittleEndian>()?;
+        let seq_nr = r.read_u32::<LittleEndian>()?;
+        Ok(NodePtr { loc, seq_nr })
+    }
 }
 
 //-------------------------------------------------------------------------
 
 pub struct NodeInfo {
     pub key_min: Option<u32>,
-    pub loc: MetadataBlock,
+    pub n_ptr: NodePtr,
 }
 
 impl NodeInfo {
     pub fn new<V: Serializable, Data: Readable, N: NodeR<V, Data>>(node: &N) -> Self {
         let key_min = node.get_key_safe(0);
-        let loc = node.loc();
-        NodeInfo { key_min, loc }
+        let n_ptr = node.n_ptr();
+        NodeInfo { key_min, n_ptr }
     }
 }
 
@@ -81,7 +101,7 @@ impl NodeResult {
 pub trait NodeR<V: Serializable, Data: Readable>: Sized {
     fn open(loc: MetadataBlock, data: Data) -> Result<Self>;
 
-    fn loc(&self) -> MetadataBlock;
+    fn n_ptr(&self) -> NodePtr;
     fn nr_entries(&self) -> usize;
     fn is_empty(&self) -> bool;
     fn get_key(&self, idx: usize) -> u32;

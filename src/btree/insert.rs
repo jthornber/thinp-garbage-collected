@@ -10,15 +10,15 @@ use crate::packed_array::*;
 
 fn insert_into_internal<
     V: Serializable,
-    INode: NodeW<MetadataBlock, WriteProxy>,
+    INode: NodeW<NodePtr, WriteProxy>,
     LNode: NodeW<V, WriteProxy>,
 >(
     alloc: &mut NodeAlloc,
-    loc: MetadataBlock,
+    n_ptr: NodePtr,
     key: u32,
     value: &V,
 ) -> Result<NodeResult> {
-    let mut node = alloc.shadow::<MetadataBlock, INode>(loc)?;
+    let mut node = alloc.shadow::<NodePtr, INode>(n_ptr)?;
 
     let mut idx = node.lower_bound(key);
     if idx < 0 {
@@ -37,11 +37,11 @@ fn insert_into_internal<
 
 fn insert_into_leaf<V: Serializable, LNode: NodeW<V, WriteProxy>>(
     alloc: &mut NodeAlloc,
-    block: MetadataBlock,
+    n_ptr: NodePtr,
     key: u32,
     value: &V,
 ) -> Result<NodeResult> {
-    let mut node = alloc.shadow::<V, LNode>(block)?;
+    let mut node = alloc.shadow::<V, LNode>(n_ptr)?;
     let idx = node.lower_bound(key);
 
     if idx < 0 {
@@ -66,45 +66,41 @@ fn insert_into_leaf<V: Serializable, LNode: NodeW<V, WriteProxy>>(
 
 fn insert_recursive<
     V: Serializable,
-    INode: NodeW<MetadataBlock, WriteProxy>,
+    INode: NodeW<NodePtr, WriteProxy>,
     LNode: NodeW<V, WriteProxy>,
 >(
     alloc: &mut NodeAlloc,
-    block: MetadataBlock,
+    n_ptr: NodePtr,
     key: u32,
     value: &V,
 ) -> Result<NodeResult> {
-    if alloc.is_internal(block)? {
-        insert_into_internal::<V, INode, LNode>(alloc, block, key, value)
+    if alloc.is_internal(n_ptr)? {
+        insert_into_internal::<V, INode, LNode>(alloc, n_ptr, key, value)
     } else {
-        insert_into_leaf::<V, LNode>(alloc, block, key, value)
+        insert_into_leaf::<V, LNode>(alloc, n_ptr, key, value)
     }
 }
 
 // Returns the new root
-pub fn insert<
-    V: Serializable,
-    INode: NodeW<MetadataBlock, WriteProxy>,
-    LNode: NodeW<V, WriteProxy>,
->(
+pub fn insert<V: Serializable, INode: NodeW<NodePtr, WriteProxy>, LNode: NodeW<V, WriteProxy>>(
     alloc: &mut NodeAlloc,
-    root: MetadataBlock,
+    root: NodePtr,
     key: u32,
     value: &V,
-) -> Result<MetadataBlock> {
+) -> Result<NodePtr> {
     use NodeResult::*;
 
     match insert_recursive::<V, INode, LNode>(alloc, root, key, value)? {
-        Single(NodeInfo { loc, .. }) => Ok(loc),
+        Single(NodeInfo { n_ptr, .. }) => Ok(n_ptr),
         Pair(left, right) => {
             let block = alloc.new_block()?;
             INode::init(block.loc(), block.clone(), false)?;
             let mut parent = INode::open(block.loc(), block.clone())?;
             parent.append(
                 &[left.key_min.unwrap(), right.key_min.unwrap()],
-                &[left.loc, right.loc],
+                &[left.n_ptr, right.n_ptr],
             );
-            Ok(parent.loc())
+            Ok(parent.n_ptr())
         }
     }
 }

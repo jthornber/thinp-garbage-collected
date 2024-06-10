@@ -10,14 +10,14 @@ use crate::packed_array::*;
 
 fn remove_internal<
     V: Serializable,
-    INode: NodeW<MetadataBlock, WriteProxy>,
+    INode: NodeW<NodePtr, WriteProxy>,
     LNode: NodeW<V, WriteProxy>,
 >(
     alloc: &mut NodeAlloc,
-    loc: MetadataBlock,
+    n_ptr: NodePtr,
     key: u32,
 ) -> Result<NodeResult> {
-    let mut node = alloc.shadow::<MetadataBlock, INode>(loc)?;
+    let mut node = alloc.shadow::<NodePtr, INode>(n_ptr)?;
 
     let mut idx = node.lower_bound(key);
     if idx < 0 {
@@ -37,10 +37,10 @@ fn remove_internal<
 
 fn remove_leaf<V: Serializable, LNode: NodeW<V, WriteProxy>>(
     alloc: &mut NodeAlloc,
-    loc: MetadataBlock,
+    n_ptr: NodePtr,
     key: u32,
 ) -> Result<NodeResult> {
-    let mut node = alloc.shadow::<V, LNode>(loc)?;
+    let mut node = alloc.shadow::<V, LNode>(n_ptr)?;
 
     let idx = node.lower_bound(key);
     if (idx >= 0) && ((idx as usize) < node.nr_entries()) {
@@ -54,42 +54,38 @@ fn remove_leaf<V: Serializable, LNode: NodeW<V, WriteProxy>>(
 
 fn remove_recurse<
     V: Serializable,
-    INode: NodeW<MetadataBlock, WriteProxy>,
+    INode: NodeW<NodePtr, WriteProxy>,
     LNode: NodeW<V, WriteProxy>,
 >(
     alloc: &mut NodeAlloc,
-    loc: MetadataBlock,
+    n_ptr: NodePtr,
     key: u32,
 ) -> Result<NodeResult> {
-    if alloc.is_internal(loc)? {
-        remove_internal::<V, INode, LNode>(alloc, loc, key)
+    if alloc.is_internal(n_ptr)? {
+        remove_internal::<V, INode, LNode>(alloc, n_ptr, key)
     } else {
-        remove_leaf::<V, LNode>(alloc, loc, key)
+        remove_leaf::<V, LNode>(alloc, n_ptr, key)
     }
 }
 
-pub fn remove<
-    V: Serializable,
-    INode: NodeW<MetadataBlock, WriteProxy>,
-    LNode: NodeW<V, WriteProxy>,
->(
+pub fn remove<V: Serializable, INode: NodeW<NodePtr, WriteProxy>, LNode: NodeW<V, WriteProxy>>(
     alloc: &mut NodeAlloc,
-    root: MetadataBlock,
+    root: NodePtr,
     key: u32,
-) -> Result<MetadataBlock> {
+) -> Result<NodePtr> {
     use NodeResult::*;
 
     match remove_recurse::<V, INode, LNode>(alloc, root, key)? {
-        Single(NodeInfo { loc, .. }) => Ok(loc),
+        Single(NodeInfo { n_ptr, .. }) => Ok(n_ptr),
         Pair(left, right) => {
             let block = alloc.new_block()?;
             INode::init(block.loc(), block.clone(), false)?;
             let mut parent = INode::open(block.loc(), block.clone())?;
             parent.append(
                 &[left.key_min.unwrap(), right.key_min.unwrap()],
-                &[left.loc, right.loc],
+                &[left.n_ptr, right.n_ptr],
             );
-            Ok(parent.loc())
+            Ok(parent.n_ptr())
         }
     }
 }
@@ -127,9 +123,9 @@ fn lt_prog<V: Serializable, N: NodeW<V, WriteProxy>>(node: &N, key: u32) -> Node
     }
 }
 
-fn remove_lt_internal<V, INode: NodeW<MetadataBlock, WriteProxy>, LNode: NodeW<V, WriteProxy>>(
+fn remove_lt_internal<V, INode: NodeW<NodePtr, WriteProxy>, LNode: NodeW<V, WriteProxy>>(
     alloc: &mut NodeAlloc,
-    loc: MetadataBlock,
+    n_ptr: NodePtr,
     key: u32,
     split_fn: &ValFn<V>,
 ) -> Result<NodeResult>
@@ -138,7 +134,7 @@ where
 {
     use NodeOp::*;
 
-    let mut node = alloc.shadow::<MetadataBlock, INode>(loc)?;
+    let mut node = alloc.shadow::<NodePtr, INode>(n_ptr)?;
     let prog = lt_prog(&node, key);
 
     let mut delta = 0;
@@ -174,7 +170,7 @@ where
 
 fn remove_lt_leaf<V, LNode: NodeW<V, WriteProxy>>(
     alloc: &mut NodeAlloc,
-    loc: MetadataBlock,
+    n_ptr: NodePtr,
     key: u32,
     split_fn: &ValFn<V>,
 ) -> Result<NodeResult>
@@ -183,7 +179,7 @@ where
 {
     use NodeOp::*;
 
-    let mut node = alloc.shadow::<V, LNode>(loc)?;
+    let mut node = alloc.shadow::<V, LNode>(n_ptr)?;
     let prog = lt_prog(&node, key);
 
     let mut delta = 0;
@@ -215,33 +211,33 @@ where
 
 pub fn remove_lt_recurse<
     V: Serializable,
-    INode: NodeW<MetadataBlock, WriteProxy>,
+    INode: NodeW<NodePtr, WriteProxy>,
     LNode: NodeW<V, WriteProxy>,
 >(
     alloc: &mut NodeAlloc,
-    loc: MetadataBlock,
+    n_ptr: NodePtr,
     key: u32,
     split_fn: &ValFn<V>,
 ) -> Result<NodeResult> {
-    if alloc.is_internal(loc)? {
-        remove_lt_internal::<V, INode, LNode>(alloc, loc, key, split_fn)
+    if alloc.is_internal(n_ptr)? {
+        remove_lt_internal::<V, INode, LNode>(alloc, n_ptr, key, split_fn)
     } else {
-        remove_lt_leaf::<V, LNode>(alloc, loc, key, split_fn)
+        remove_lt_leaf::<V, LNode>(alloc, n_ptr, key, split_fn)
     }
 }
 
 pub fn remove_lt<
     V: Serializable,
-    INode: NodeW<MetadataBlock, WriteProxy>,
+    INode: NodeW<NodePtr, WriteProxy>,
     LNode: NodeW<V, WriteProxy>,
 >(
     alloc: &mut NodeAlloc,
-    root: MetadataBlock,
+    root: NodePtr,
     key: u32,
     split_fn: &ValFn<V>,
-) -> Result<MetadataBlock> {
+) -> Result<NodePtr> {
     match remove_lt_recurse::<V, INode, LNode>(alloc, root, key, split_fn)? {
-        NodeResult::Single(NodeInfo { loc, .. }) => Ok(loc),
+        NodeResult::Single(NodeInfo { n_ptr, .. }) => Ok(n_ptr),
         NodeResult::Pair(_, _) => Err(anyhow!("remove_lt increase nr entries somehow")),
     }
 }
@@ -274,9 +270,9 @@ fn geq_prog<V: Serializable, N: NodeW<V, WriteProxy>>(node: &N, key: u32) -> Nod
     }
 }
 
-fn remove_geq_internal<V, INode: NodeW<MetadataBlock, WriteProxy>, LNode: NodeW<V, WriteProxy>>(
+fn remove_geq_internal<V, INode: NodeW<NodePtr, WriteProxy>, LNode: NodeW<V, WriteProxy>>(
     alloc: &mut NodeAlloc,
-    loc: MetadataBlock,
+    n_ptr: NodePtr,
     key: u32,
     split_fn: &ValFn<V>,
 ) -> Result<NodeResult>
@@ -285,7 +281,7 @@ where
 {
     use NodeOp::*;
 
-    let mut node = alloc.shadow::<MetadataBlock, INode>(loc)?;
+    let mut node = alloc.shadow::<NodePtr, INode>(n_ptr)?;
     let prog = geq_prog(&node, key);
 
     let mut delta = 0;
@@ -321,7 +317,7 @@ where
 
 fn remove_geq_leaf<V, LNode: NodeW<V, WriteProxy>>(
     alloc: &mut NodeAlloc,
-    loc: MetadataBlock,
+    n_ptr: NodePtr,
     key: u32,
     split_fn: &ValFn<V>,
 ) -> Result<NodeResult>
@@ -330,7 +326,7 @@ where
 {
     use NodeOp::*;
 
-    let mut node = alloc.shadow::<V, LNode>(loc)?;
+    let mut node = alloc.shadow::<V, LNode>(n_ptr)?;
     let prog = geq_prog(&node, key);
 
     let mut delta = 0;
@@ -362,33 +358,33 @@ where
 
 fn remove_geq_recurse<
     V: Serializable,
-    INode: NodeW<MetadataBlock, WriteProxy>,
+    INode: NodeW<NodePtr, WriteProxy>,
     LNode: NodeW<V, WriteProxy>,
 >(
     alloc: &mut NodeAlloc,
-    loc: MetadataBlock,
+    n_ptr: NodePtr,
     key: u32,
     split_fn: &ValFn<V>,
 ) -> Result<NodeResult> {
-    if alloc.is_internal(loc)? {
-        remove_geq_internal::<V, INode, LNode>(alloc, loc, key, split_fn)
+    if alloc.is_internal(n_ptr)? {
+        remove_geq_internal::<V, INode, LNode>(alloc, n_ptr, key, split_fn)
     } else {
-        remove_geq_leaf::<V, LNode>(alloc, loc, key, split_fn)
+        remove_geq_leaf::<V, LNode>(alloc, n_ptr, key, split_fn)
     }
 }
 
 pub fn remove_geq<
     V: Serializable,
-    INode: NodeW<MetadataBlock, WriteProxy>,
+    INode: NodeW<NodePtr, WriteProxy>,
     LNode: NodeW<V, WriteProxy>,
 >(
     alloc: &mut NodeAlloc,
-    root: MetadataBlock,
+    root: NodePtr,
     key: u32,
     split_fn: &ValFn<V>,
-) -> Result<MetadataBlock> {
+) -> Result<NodePtr> {
     match remove_geq_recurse::<V, INode, LNode>(alloc, root, key, split_fn)? {
-        NodeResult::Single(NodeInfo { loc, .. }) => Ok(loc),
+        NodeResult::Single(NodeInfo { n_ptr, .. }) => Ok(n_ptr),
         NodeResult::Pair(_, _) => Err(anyhow!("remove_geq increased nr of entries")),
     }
 }
@@ -478,9 +474,9 @@ fn range_split<V: Serializable, N: NodeW<V, WriteProxy>>(
     }
 }
 
-fn remove_range_internal<V, INode: NodeW<MetadataBlock, WriteProxy>, LNode: NodeW<V, WriteProxy>>(
+fn remove_range_internal<V, INode: NodeW<NodePtr, WriteProxy>, LNode: NodeW<V, WriteProxy>>(
     alloc: &mut NodeAlloc,
-    loc: MetadataBlock,
+    n_ptr: NodePtr,
     key_begin: u32,
     key_end: u32,
     split_lt: &ValFn<V>,
@@ -491,7 +487,7 @@ where
 {
     use NodeOp::*;
 
-    let mut node = alloc.shadow::<MetadataBlock, INode>(loc)?;
+    let mut node = alloc.shadow::<NodePtr, INode>(n_ptr)?;
     let prog = range_split(&node, key_begin, key_end);
     let prog_len = prog.len();
 
@@ -544,7 +540,7 @@ where
 
 fn remove_range_leaf<V: Serializable + Copy, LNode: NodeW<V, WriteProxy>>(
     alloc: &mut NodeAlloc,
-    loc: MetadataBlock,
+    n_ptr: NodePtr,
     key_begin: u32,
     key_end: u32,
     split_lt: &ValFn<V>,
@@ -552,7 +548,7 @@ fn remove_range_leaf<V: Serializable + Copy, LNode: NodeW<V, WriteProxy>>(
 ) -> Result<NodeResult> {
     use NodeOp::*;
 
-    let mut node = alloc.shadow::<V, LNode>(loc)?;
+    let mut node = alloc.shadow::<V, LNode>(n_ptr)?;
     let prog = range_split(&node, key_begin, key_end);
     let prog_len = prog.len();
 
@@ -622,52 +618,52 @@ fn remove_range_leaf<V: Serializable + Copy, LNode: NodeW<V, WriteProxy>>(
 
 fn remove_range_recurse<
     V: Serializable + Copy,
-    INode: NodeW<MetadataBlock, WriteProxy>,
+    INode: NodeW<NodePtr, WriteProxy>,
     LNode: NodeW<V, WriteProxy>,
 >(
     alloc: &mut NodeAlloc,
-    loc: MetadataBlock,
+    n_ptr: NodePtr,
     key_begin: u32,
     key_end: u32,
     split_lt: &ValFn<V>,
     split_geq: &ValFn<V>,
 ) -> Result<NodeResult> {
-    if alloc.is_internal(loc)? {
+    if alloc.is_internal(n_ptr)? {
         remove_range_internal::<V, INode, LNode>(
-            alloc, loc, key_begin, key_end, split_lt, split_geq,
+            alloc, n_ptr, key_begin, key_end, split_lt, split_geq,
         )
     } else {
-        remove_range_leaf::<V, LNode>(alloc, loc, key_begin, key_end, split_lt, split_geq)
+        remove_range_leaf::<V, LNode>(alloc, n_ptr, key_begin, key_end, split_lt, split_geq)
     }
 }
 
 pub fn remove_range<
     V: Serializable + Copy,
-    INode: NodeW<MetadataBlock, WriteProxy>,
+    INode: NodeW<NodePtr, WriteProxy>,
     LNode: NodeW<V, WriteProxy>,
 >(
     alloc: &mut NodeAlloc,
-    root: MetadataBlock,
+    root: NodePtr,
     key_begin: u32,
     key_end: u32,
     split_lt: &ValFn<V>,
     split_geq: &ValFn<V>,
-) -> Result<MetadataBlock> {
+) -> Result<NodePtr> {
     use NodeResult::*;
 
     match remove_range_recurse::<V, INode, LNode>(
         alloc, root, key_begin, key_end, split_lt, split_geq,
     )? {
-        Single(NodeInfo { loc, .. }) => Ok(loc),
+        Single(NodeInfo { n_ptr, .. }) => Ok(n_ptr),
         Pair(left, right) => {
             let proxy = alloc.new_block()?;
             INode::init(proxy.loc(), proxy.clone(), false)?;
             let mut parent = INode::open(proxy.loc(), proxy)?;
             parent.append(
                 &[left.key_min.unwrap(), right.key_min.unwrap()],
-                &[left.loc, right.loc],
+                &[left.n_ptr, right.n_ptr],
             );
-            Ok(parent.loc())
+            Ok(parent.n_ptr())
         }
     }
 }

@@ -2,13 +2,12 @@ use anyhow::Result;
 
 use crate::block_cache::*;
 use crate::btree::node::*;
-use crate::byte_types::*;
 use crate::packed_array::*;
 use crate::transaction_manager::*;
 
 //-------------------------------------------------------------------------
 
-pub fn lookup<V: Serializable, INode: NodeR<NodePtr, ReadProxy>, LNode: NodeR<V, ReadProxy>>(
+pub fn lookup<V: Serializable, INode: NodeR<NodePtr, SharedProxy>, LNode: NodeR<V, SharedProxy>>(
     tm: &TransactionManager,
     root: NodePtr,
     key: u32,
@@ -61,7 +60,7 @@ enum NodeOp {
 
 type NodeProgram = Vec<NodeOp>;
 
-fn lower_bound<V: Serializable, N: NodeR<V, ReadProxy>>(node: &N, key: u32) -> usize {
+fn lower_bound<V: Serializable, N: NodeR<V, SharedProxy>>(node: &N, key: u32) -> usize {
     let idx = node.lower_bound(key);
     if idx < 0 {
         0
@@ -70,7 +69,7 @@ fn lower_bound<V: Serializable, N: NodeR<V, ReadProxy>>(node: &N, key: u32) -> u
     }
 }
 
-fn get_prog<V: Serializable, N: NodeR<V, ReadProxy>>(
+fn get_prog<V: Serializable, N: NodeR<V, SharedProxy>>(
     node: &N,
     key_begin: u32,
     key_end: u32,
@@ -111,7 +110,7 @@ fn get_prog<V: Serializable, N: NodeR<V, ReadProxy>>(
     prog
 }
 
-fn get_prog_above<V: Serializable, N: NodeR<V, ReadProxy>>(node: &N, key: u32) -> NodeProgram {
+fn get_prog_above<V: Serializable, N: NodeR<V, SharedProxy>>(node: &N, key: u32) -> NodeProgram {
     use NodeOp::*;
 
     let mut prog = Vec::new();
@@ -134,7 +133,7 @@ fn get_prog_above<V: Serializable, N: NodeR<V, ReadProxy>>(node: &N, key: u32) -
     prog
 }
 
-fn get_prog_below<V: Serializable, N: NodeR<V, ReadProxy>>(node: &N, key: u32) -> NodeProgram {
+fn get_prog_below<V: Serializable, N: NodeR<V, SharedProxy>>(node: &N, key: u32) -> NodeProgram {
     use NodeOp::*;
 
     let mut prog = Vec::new();
@@ -156,7 +155,11 @@ fn get_prog_below<V: Serializable, N: NodeR<V, ReadProxy>>(node: &N, key: u32) -
     prog
 }
 
-fn select_above<V: Serializable, INode: NodeR<NodePtr, ReadProxy>, LNode: NodeR<V, ReadProxy>>(
+fn select_above<
+    V: Serializable,
+    INode: NodeR<NodePtr, SharedProxy>,
+    LNode: NodeR<V, SharedProxy>,
+>(
     tm: &TransactionManager,
     n_ptr: NodePtr,
     key: u32,
@@ -215,7 +218,11 @@ fn select_above<V: Serializable, INode: NodeR<NodePtr, ReadProxy>, LNode: NodeR<
     Ok(())
 }
 
-fn select_below<V: Serializable, INode: NodeR<NodePtr, ReadProxy>, LNode: NodeR<V, ReadProxy>>(
+fn select_below<
+    V: Serializable,
+    INode: NodeR<NodePtr, SharedProxy>,
+    LNode: NodeR<V, SharedProxy>,
+>(
     tm: &TransactionManager,
     n_ptr: NodePtr,
     key: u32,
@@ -275,7 +282,7 @@ fn select_below<V: Serializable, INode: NodeR<NodePtr, ReadProxy>, LNode: NodeR<
     Ok(())
 }
 
-fn select_all<V: Serializable, INode: NodeR<NodePtr, ReadProxy>, LNode: NodeR<V, ReadProxy>>(
+fn select_all<V: Serializable, INode: NodeR<NodePtr, SharedProxy>, LNode: NodeR<V, SharedProxy>>(
     tm: &TransactionManager,
     n_ptr: NodePtr,
     results: &mut Vec<(u32, V)>,
@@ -302,8 +309,8 @@ fn select_all<V: Serializable, INode: NodeR<NodePtr, ReadProxy>, LNode: NodeR<V,
 
 fn select_above_below<
     V: Serializable,
-    INode: NodeR<NodePtr, ReadProxy>,
-    LNode: NodeR<V, ReadProxy>,
+    INode: NodeR<NodePtr, SharedProxy>,
+    LNode: NodeR<V, SharedProxy>,
 >(
     tm: &TransactionManager,
     n_ptr: NodePtr,
@@ -394,8 +401,8 @@ fn select_above_below<
 // though.
 pub fn lookup_range<
     V: Serializable,
-    INode: NodeR<NodePtr, ReadProxy>,
-    LNode: NodeR<V, ReadProxy>,
+    INode: NodeR<NodePtr, SharedProxy>,
+    LNode: NodeR<V, SharedProxy>,
 >(
     tm: &TransactionManager,
     root: NodePtr,
@@ -441,8 +448,8 @@ mod tests {
         }
     }
 
-    impl NodeR<u32, ReadProxy> for MockNode {
-        fn open(_loc: MetadataBlock, _data: ReadProxy) -> Result<Self> {
+    impl NodeR<u32, SharedProxy> for MockNode {
+        fn open(_loc: MetadataBlock, _data: SharedProxy) -> Result<Self> {
             unimplemented!();
         }
 

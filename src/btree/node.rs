@@ -62,7 +62,7 @@ pub fn read_node_header<R: Read>(r: &mut R) -> Result<NodeHeader> {
     })
 }
 
-pub fn read_flags(r_proxy: &ReadProxy) -> Result<BTreeFlags> {
+pub fn read_flags(r_proxy: &SharedProxy) -> Result<BTreeFlags> {
     let hdr = read_node_header(&mut r_proxy.r())?;
     Ok(hdr.flags)
 }

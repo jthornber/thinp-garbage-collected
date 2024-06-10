@@ -26,10 +26,10 @@ fn get_tid_() -> ThreadId {
 #[derive(Eq, PartialEq)]
 enum LockState {
     Unlocked,
-    Read(usize),
+    Shared(usize),
 
     // We record the thread id so we can spot dead locks
-    Write(ThreadId),
+    Exclusive(ThreadId),
 }
 
 struct EntryInner {
@@ -44,10 +44,10 @@ struct CacheEntry {
 }
 
 impl CacheEntry {
-    fn new_read(block: Block) -> CacheEntry {
+    fn new_shared(block: Block) -> CacheEntry {
         CacheEntry {
             inner: Mutex::new(EntryInner {
-                lock: LockState::Read(1),
+                lock: LockState::Shared(1),
                 dirty: false,
                 block,
             }),
@@ -55,10 +55,10 @@ impl CacheEntry {
         }
     }
 
-    fn new_write(block: Block) -> CacheEntry {
+    fn new_exclusive(block: Block) -> CacheEntry {
         CacheEntry {
             inner: Mutex::new(EntryInner {
-                lock: LockState::Write(get_tid_()),
+                lock: LockState::Exclusive(get_tid_()),
                 dirty: true,
                 block,
             }),
@@ -82,36 +82,36 @@ impl CacheEntry {
     }
 
     // Returns true on success, if false you will need to wait for the lock
-    fn read_lock(&self) -> bool {
+    fn shared_lock(&self) -> bool {
         use LockState::*;
 
         let mut inner = self.inner.lock().unwrap();
         match inner.lock {
             Unlocked => {
-                inner.lock = Read(1);
+                inner.lock = Shared(1);
                 true
             }
-            Read(n) => {
-                inner.lock = Read(n + 1);
+            Shared(n) => {
+                inner.lock = Shared(n + 1);
                 true
             }
-            Write(_tid) => false,
+            Exclusive(_tid) => false,
         }
     }
 
     // Returns true on success, if false you will need to wait for the lock
-    fn write_lock(&self) -> bool {
+    fn exclusive_lock(&self) -> bool {
         use LockState::*;
 
         let mut inner = self.inner.lock().unwrap();
         match inner.lock {
             Unlocked => {
-                inner.lock = Write(get_tid_());
+                inner.lock = Exclusive(get_tid_());
                 inner.dirty = true;
                 true
             }
-            Read(_) => false,
-            Write(tid) => {
+            Shared(_) => false,
+            Exclusive(tid) => {
                 if tid == get_tid_() {
                     panic!("thread attempting to lock block {} twice", inner.block.loc);
                 }
@@ -128,13 +128,13 @@ impl CacheEntry {
             Unlocked => {
                 panic!("Unlocking an unlocked block {}", inner.block.loc);
             }
-            Read(1) => {
+            Shared(1) => {
                 inner.lock = Unlocked;
             }
-            Read(n) => {
-                inner.lock = Read(n - 1);
+            Shared(n) => {
+                inner.lock = Shared(n - 1);
             }
-            Write(tid) => {
+            Exclusive(tid) => {
                 assert!(tid == get_tid_());
                 inner.lock = Unlocked;
             }
@@ -250,18 +250,18 @@ impl MetadataCacheInner {
     }
 
     // Returns true on success
-    pub fn read_lock(&mut self, loc: u32) -> Result<LockResult> {
+    pub fn shared_lock(&mut self, loc: u32) -> Result<LockResult> {
         use LockResult::*;
 
         if let Some(entry) = self.cache.get_mut(&loc).cloned() {
-            if entry.read_lock() {
+            if entry.shared_lock() {
                 self.remove_lru_(loc);
                 Ok(Locked(entry.clone()))
             } else {
                 Ok(Busy(entry.clone()))
             }
         } else {
-            let entry = Arc::new(CacheEntry::new_read(self.read_(loc)?));
+            let entry = Arc::new(CacheEntry::new_shared(self.read_(loc)?));
             self.cache.insert(loc, entry.clone());
             Ok(Locked(entry.clone()))
         }
@@ -271,42 +271,42 @@ impl MetadataCacheInner {
         use LockResult::*;
 
         if let Some(entry) = self.cache.get_mut(&loc).cloned() {
-            if entry.read_lock() {
+            if entry.shared_lock() {
                 self.remove_lru_(loc);
                 Ok(Locked(entry.clone()))
             } else {
-                panic!("cannot gc_lock a write locked block");
+                panic!("cannot gc_lock an exclusive locked block");
             }
         } else {
-            let entry = Arc::new(CacheEntry::new_read(self.read_(loc)?));
+            let entry = Arc::new(CacheEntry::new_shared(self.read_(loc)?));
             self.cache.insert(loc, entry.clone());
             Ok(Locked(entry))
         }
     }
 
-    pub fn write_lock(&mut self, loc: u32) -> Result<LockResult> {
+    pub fn exclusive_lock(&mut self, loc: u32) -> Result<LockResult> {
         use LockResult::*;
 
         if let Some(entry) = self.cache.get_mut(&loc).cloned() {
-            if entry.write_lock() {
+            if entry.exclusive_lock() {
                 self.remove_lru_(loc);
                 Ok(Locked(entry.clone()))
             } else {
                 Ok(Busy(entry.clone()))
             }
         } else {
-            let entry = Arc::new(CacheEntry::new_write(self.read_(loc)?));
+            let entry = Arc::new(CacheEntry::new_exclusive(self.read_(loc)?));
             self.cache.insert(loc, entry.clone());
             Ok(Locked(entry.clone()))
         }
     }
 
-    /// Write lock and zero the data (avoids reading the block)
+    /// Exclusive lock and zero the data (avoids reading the block)
     pub fn zero_lock(&mut self, loc: u32) -> Result<LockResult> {
         use LockResult::*;
 
         if let Some(entry) = self.cache.get_mut(&loc).cloned() {
-            if entry.write_lock() {
+            if entry.exclusive_lock() {
                 let inner = entry.inner.lock().unwrap();
                 let data = inner.block.get_data();
                 unsafe {
@@ -319,13 +319,14 @@ impl MetadataCacheInner {
             }
         } else {
             let block = Block::zeroed(loc as u64);
-            let entry = Arc::new(CacheEntry::new_write(block));
+            let entry = Arc::new(CacheEntry::new_exclusive(block));
             self.cache.insert(loc, entry.clone());
             Ok(Locked(entry.clone()))
         }
     }
 
     /// Writeback all dirty blocks
+    // FIXME: synchronous!
     pub fn flush(&mut self) -> Result<()> {
         for entry in self.cache.values() {
             if !entry.is_held() && entry.is_dirty() {
@@ -340,34 +341,33 @@ impl MetadataCacheInner {
 
 //-------------------------------------------------------------------------
 
-// FIXME: I don't think the proxies should expose the block header
 #[derive(Clone)]
-pub struct ReadProxy_ {
+pub struct SharedProxy_ {
     pub loc: u32,
     cache: Arc<MetadataCache>,
     entry: Arc<CacheEntry>,
 }
 
-impl Drop for ReadProxy_ {
+impl Drop for SharedProxy_ {
     fn drop(&mut self) {
         self.cache.unlock_(self.loc);
     }
 }
 
 #[derive(Clone)]
-pub struct ReadProxy {
-    proxy: Arc<ReadProxy_>,
+pub struct SharedProxy {
+    proxy: Arc<SharedProxy_>,
     begin: usize,
     end: usize,
 }
 
-impl ReadProxy {
+impl SharedProxy {
     pub fn loc(&self) -> u32 {
         self.proxy.loc
     }
 }
 
-impl Readable for ReadProxy {
+impl Readable for SharedProxy {
     fn r(&self) -> &[u8] {
         let inner = self.proxy.entry.inner.lock().unwrap();
         &inner.block.get_data()[self.begin..self.end]
@@ -394,32 +394,32 @@ impl Readable for ReadProxy {
 //-------------------------------------------------------------------------
 
 #[derive(Clone)]
-pub struct WriteProxy_ {
+pub struct ExclusiveProxy_ {
     pub loc: MetadataBlock,
     cache: Arc<MetadataCache>,
     entry: Arc<CacheEntry>,
 }
 
-impl Drop for WriteProxy_ {
+impl Drop for ExclusiveProxy_ {
     fn drop(&mut self) {
         self.cache.unlock_(self.loc);
     }
 }
 
 #[derive(Clone)]
-pub struct WriteProxy {
-    proxy: Arc<WriteProxy_>,
+pub struct ExclusiveProxy {
+    proxy: Arc<ExclusiveProxy_>,
     begin: usize,
     end: usize,
 }
 
-impl WriteProxy {
+impl ExclusiveProxy {
     pub fn loc(&self) -> MetadataBlock {
         self.proxy.loc
     }
 }
 
-impl Readable for WriteProxy {
+impl Readable for ExclusiveProxy {
     fn r(&self) -> &[u8] {
         let inner = self.proxy.entry.inner.lock().unwrap();
         &inner.block.get_data()[self.begin..self.end]
@@ -442,7 +442,7 @@ impl Readable for WriteProxy {
     }
 }
 
-impl Writeable for WriteProxy {
+impl Writeable for ExclusiveProxy {
     fn rw(&mut self) -> &mut [u8] {
         let inner = self.proxy.entry.inner.lock().unwrap();
         &mut inner.block.get_data()[self.begin..self.end]
@@ -485,21 +485,21 @@ impl MetadataCache {
         inner.residency()
     }
 
-    pub fn read_lock(self: &Arc<Self>, loc: u32) -> Result<ReadProxy> {
+    pub fn shared_lock(self: &Arc<Self>, loc: u32) -> Result<SharedProxy> {
         use LockResult::*;
 
         let mut inner = self.inner.lock().unwrap();
 
         loop {
-            match inner.read_lock(loc)? {
+            match inner.shared_lock(loc)? {
                 Locked(entry) => {
-                    let proxy_ = ReadProxy_ {
+                    let proxy_ = SharedProxy_ {
                         loc,
                         cache: self.clone(),
                         entry: entry.clone(),
                     };
 
-                    let proxy = ReadProxy {
+                    let proxy = SharedProxy {
                         proxy: Arc::new(proxy_),
                         begin: 0,
                         end: BLOCK_SIZE,
@@ -512,20 +512,20 @@ impl MetadataCache {
         }
     }
 
-    pub fn gc_lock(self: Arc<Self>, loc: u32) -> Result<ReadProxy> {
+    pub fn gc_lock(self: Arc<Self>, loc: u32) -> Result<SharedProxy> {
         use LockResult::*;
 
         let mut inner = self.inner.lock().unwrap();
 
         match inner.gc_lock(loc)? {
             Locked(entry) => {
-                let proxy_ = ReadProxy_ {
+                let proxy_ = SharedProxy_ {
                     loc,
                     cache: self.clone(),
                     entry: entry.clone(),
                 };
 
-                let proxy = ReadProxy {
+                let proxy = SharedProxy {
                     proxy: Arc::new(proxy_),
                     begin: 0,
                     end: BLOCK_SIZE,
@@ -539,21 +539,21 @@ impl MetadataCache {
         }
     }
 
-    pub fn write_lock(self: &Arc<Self>, loc: u32) -> Result<WriteProxy> {
+    pub fn exclusive_lock(self: &Arc<Self>, loc: u32) -> Result<ExclusiveProxy> {
         use LockResult::*;
 
         let mut inner = self.inner.lock().unwrap();
 
         loop {
-            match inner.write_lock(loc)? {
+            match inner.exclusive_lock(loc)? {
                 Locked(entry) => {
-                    let proxy_ = WriteProxy_ {
+                    let proxy_ = ExclusiveProxy_ {
                         loc,
                         cache: self.clone(),
                         entry: entry.clone(),
                     };
 
-                    let proxy = WriteProxy {
+                    let proxy = ExclusiveProxy {
                         proxy: Arc::new(proxy_),
                         begin: 0,
                         end: BLOCK_SIZE,
@@ -566,8 +566,8 @@ impl MetadataCache {
         }
     }
 
-    /// Write lock and zero the data (avoids reading the block)
-    pub fn zero_lock(self: &Arc<Self>, loc: u32) -> Result<WriteProxy> {
+    /// Exclusive lock and zero the data (avoids reading the block)
+    pub fn zero_lock(self: &Arc<Self>, loc: u32) -> Result<ExclusiveProxy> {
         use LockResult::*;
 
         let mut inner = self.inner.lock().unwrap();
@@ -575,13 +575,13 @@ impl MetadataCache {
         loop {
             match inner.zero_lock(loc)? {
                 Locked(entry) => {
-                    let proxy_ = WriteProxy_ {
+                    let proxy_ = ExclusiveProxy_ {
                         loc,
                         cache: self.clone(),
                         entry: entry.clone(),
                     };
 
-                    let proxy = WriteProxy {
+                    let proxy = ExclusiveProxy {
                         proxy: Arc::new(proxy_),
                         begin: 0,
                         end: BLOCK_SIZE,
@@ -662,7 +662,7 @@ mod test {
 
         cache.flush()?;
 
-        let rp = cache.read_lock(0)?;
+        let rp = cache.shared_lock(0)?;
 
         let data = rp.r();
         verify(data, 21);
@@ -690,7 +690,7 @@ mod test {
             let cache = Arc::new(MetadataCache::new(engine, 16)?);
 
             for i in 0..nr_blocks {
-                let rp = cache.read_lock(i)?;
+                let rp = cache.shared_lock(i)?;
                 verify(rp.r(), i as u8);
             }
         }
@@ -729,7 +729,7 @@ mod test {
             let cache = Arc::new(MetadataCache::new(engine, 16)?);
 
             for i in 0..nr_blocks {
-                let rp = cache.read_lock(i)?;
+                let rp = cache.shared_lock(i)?;
                 verify(rp.r(), (i * 3) as u8);
             }
         }

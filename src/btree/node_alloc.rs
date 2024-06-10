@@ -18,7 +18,7 @@ impl NodeAlloc {
         Self { tm, context }
     }
 
-    pub fn new_block(&mut self) -> Result<WriteProxy> {
+    pub fn new_block(&mut self) -> Result<ExclusiveProxy> {
         self.tm.new_block(self.context)
     }
 
@@ -27,7 +27,7 @@ impl NodeAlloc {
         Ok(read_flags(&b)? == BTreeFlags::Internal)
     }
 
-    pub fn shadow<V: Serializable, Node: NodeW<V, WriteProxy>>(
+    pub fn shadow<V: Serializable, Node: NodeW<V, ExclusiveProxy>>(
         &mut self,
         n_ptr: NodePtr,
     ) -> Result<Node> {
@@ -38,7 +38,7 @@ impl NodeAlloc {
 
 //-------------------------------------------------------------------------
 
-pub fn redistribute2<V: Serializable, Node: NodeW<V, WriteProxy>>(
+pub fn redistribute2<V: Serializable, Node: NodeW<V, ExclusiveProxy>>(
     left: &mut Node,
     right: &mut Node,
 ) {
@@ -67,7 +67,7 @@ pub fn redistribute2<V: Serializable, Node: NodeW<V, WriteProxy>>(
 // FIXME: common code with insert
 pub fn ensure_space<
     V: Serializable,
-    Node: NodeW<V, WriteProxy>,
+    Node: NodeW<V, ExclusiveProxy>,
     M: Fn(&mut Node, usize) -> NodeInsertOutcome,
 >(
     alloc: &mut NodeAlloc,
@@ -97,7 +97,7 @@ pub fn ensure_space<
 }
 
 // Call this when recursing back up the spine
-pub fn node_insert_result<Node: NodeW<NodePtr, WriteProxy>>(
+pub fn node_insert_result<Node: NodeW<NodePtr, ExclusiveProxy>>(
     alloc: &mut NodeAlloc,
     node: &mut Node,
     idx: usize,

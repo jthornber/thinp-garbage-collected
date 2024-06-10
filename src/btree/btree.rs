@@ -27,10 +27,10 @@ pub struct BTree<V: Serializable + Copy, INodeR, INodeW, LNodeR, LNodeW> {
 
 impl<
         V: Serializable + Copy,
-        INodeR: NodeR<NodePtr, ReadProxy>,
-        INodeW: NodeW<NodePtr, WriteProxy>,
-        LNodeR: NodeR<V, ReadProxy>,
-        LNodeW: NodeW<V, WriteProxy>,
+        INodeR: NodeR<NodePtr, SharedProxy>,
+        INodeW: NodeW<NodePtr, ExclusiveProxy>,
+        LNodeR: NodeR<V, SharedProxy>,
+        LNodeW: NodeW<V, ExclusiveProxy>,
     > BTree<V, INodeR, INodeW, LNodeR, LNodeW>
 {
     pub fn open_tree(
@@ -164,7 +164,7 @@ impl<
 
     //-------------------------------
 
-    fn check_keys_<NV: Serializable, Node: NodeR<NV, ReadProxy>>(
+    fn check_keys_<NV: Serializable, Node: NodeR<NV, SharedProxy>>(
         node: &Node,
         key_min: u32,
         key_max: Option<u32>,
@@ -241,14 +241,14 @@ impl<
     }
 }
 
-pub fn btree_refs(r_proxy: &ReadProxy, queue: &mut VecDeque<BlockRef>) {
+pub fn btree_refs(r_proxy: &SharedProxy, queue: &mut VecDeque<BlockRef>) {
     let flags = read_flags(&r_proxy).expect("couldn't read node");
 
     match flags {
         BTreeFlags::Internal => {
             // FIXME: hard coded for now.  No point fixing this until we've switched
             // to log based transactions.
-            let node = crate::btree::simple_node::SimpleNode::<NodePtr, ReadProxy>::open(
+            let node = crate::btree::simple_node::SimpleNode::<NodePtr, SharedProxy>::open(
                 r_proxy.loc(),
                 r_proxy.clone(),
             )
@@ -321,10 +321,10 @@ mod test {
 
     type TestTree = BTree<
         Value,
-        SimpleNode<NodePtr, ReadProxy>,
-        SimpleNode<NodePtr, WriteProxy>,
-        SimpleNode<Value, ReadProxy>,
-        SimpleNode<Value, WriteProxy>,
+        SimpleNode<NodePtr, SharedProxy>,
+        SimpleNode<NodePtr, ExclusiveProxy>,
+        SimpleNode<Value, SharedProxy>,
+        SimpleNode<Value, ExclusiveProxy>,
     >;
 
     #[allow(dead_code)]

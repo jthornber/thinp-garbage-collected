@@ -75,12 +75,12 @@ impl TransactionManager_ {
         */
     }
 
-    fn read(&self, loc: MetadataBlock) -> Result<ReadProxy> {
-        let b = self.cache.read_lock(loc)?;
+    fn read(&self, loc: MetadataBlock) -> Result<SharedProxy> {
+        let b = self.cache.shared_lock(loc)?;
         Ok(b)
     }
 
-    fn new_block(&mut self, context: ReferenceContext) -> Result<WriteProxy> {
+    fn new_block(&mut self, context: ReferenceContext) -> Result<ExclusiveProxy> {
         if let Some(loc) = self.allocator.lock().unwrap().allocate_metadata()? {
             let b = self.cache.zero_lock(loc)?;
             self.shadows.insert((context, loc));
@@ -106,12 +106,16 @@ impl TransactionManager_ {
     /// a block from the shadow set.  But this won't work because we need to start
     /// calling inc_ref() for children blocks if we ever shadow that block again.
     ///
-    fn shadow(&mut self, context: ReferenceContext, old_loc: MetadataBlock) -> Result<WriteProxy> {
+    fn shadow(
+        &mut self,
+        context: ReferenceContext,
+        old_loc: MetadataBlock,
+    ) -> Result<ExclusiveProxy> {
         if self.shadows.contains(&(context, old_loc)) {
-            Ok(self.cache.write_lock(old_loc)?)
+            Ok(self.cache.exclusive_lock(old_loc)?)
         } else if let Some(loc) = self.allocator.lock().unwrap().allocate_metadata()? {
             eprintln!("shadowing {}", old_loc);
-            let old = self.cache.read_lock(old_loc)?;
+            let old = self.cache.shared_lock(old_loc)?;
             let mut new = self.cache.zero_lock(loc)?;
             self.shadows.insert((context, loc));
 
@@ -149,17 +153,17 @@ impl TransactionManager {
         inner.commit(roots)
     }
 
-    pub fn read(&self, loc: MetadataBlock) -> Result<ReadProxy> {
+    pub fn read(&self, loc: MetadataBlock) -> Result<SharedProxy> {
         let inner = self.inner.lock().unwrap();
         inner.read(loc)
     }
 
-    pub fn new_block(&self, context: ReferenceContext) -> Result<WriteProxy> {
+    pub fn new_block(&self, context: ReferenceContext) -> Result<ExclusiveProxy> {
         let mut inner = self.inner.lock().unwrap();
         inner.new_block(context)
     }
 
-    pub fn shadow(&self, context: ReferenceContext, loc: MetadataBlock) -> Result<WriteProxy> {
+    pub fn shadow(&self, context: ReferenceContext, loc: MetadataBlock) -> Result<ExclusiveProxy> {
         let mut inner = self.inner.lock().unwrap();
         inner.shadow(context, loc)
     }

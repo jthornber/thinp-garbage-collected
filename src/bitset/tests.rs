@@ -32,7 +32,7 @@ impl Fixture {
         })
     }
 
-    fn alloc(&mut self) -> Result<WriteProxy> {
+    fn alloc(&mut self) -> Result<ExclusiveProxy> {
         let b = self.cache.zero_lock(self.alloc_begin)?;
         self.alloc_begin += 1;
         Ok(b)
@@ -343,7 +343,7 @@ fn reopen() -> Result<()> {
     fix.cache.flush()?;
 
     {
-        let sb = fix.cache.read_lock(0)?;
+        let sb = fix.cache.shared_lock(0)?;
         let root = BitsetRoot::unpack(&mut sb.r())?;
 
         let bitset = Bitset::open(fix.cache.clone(), root)?;

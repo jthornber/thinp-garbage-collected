@@ -6,7 +6,6 @@ use std::sync::Arc;
 use thinp::math::div_up;
 
 use crate::block_cache::*;
-use crate::block_kinds::*;
 use crate::byte_types::{Readable, Writeable, U32};
 use crate::packed_array::PArray;
 use crate::packed_array::Serializable;
@@ -180,7 +179,7 @@ impl<Data: Writeable> Bitmap<Data> {
     }
 }
 
-fn init_bitmap(mut block: WriteProxy) -> Result<Bitmap<WriteProxy>> {
+fn init_bitmap(mut block: ExclusiveProxy) -> Result<Bitmap<ExclusiveProxy>> {
     let loc = block.loc();
 
     let mut w = std::io::Cursor::new(block.rw());
@@ -261,7 +260,7 @@ impl<Data: Writeable> MetadataIndex<Data> {
     }
 }
 
-fn init_index_block(mut block: WriteProxy) -> Result<MetadataIndex<WriteProxy>> {
+fn init_index_block(mut block: ExclusiveProxy) -> Result<MetadataIndex<ExclusiveProxy>> {
     let loc = block.loc();
     let mut w = std::io::Cursor::new(block.rw());
 
@@ -277,12 +276,15 @@ fn init_index_block(mut block: WriteProxy) -> Result<MetadataIndex<WriteProxy>> 
     Ok(MetadataIndex::new(block.loc(), block))
 }
 
-fn load_indexes(cache: Arc<MetadataCache>, root: u32) -> Result<Vec<MetadataIndex<WriteProxy>>> {
+fn load_indexes(
+    cache: Arc<MetadataCache>,
+    root: u32,
+) -> Result<Vec<MetadataIndex<ExclusiveProxy>>> {
     let mut indexes = Vec::new();
     let mut next = root;
 
     while next != 0 {
-        let b = cache.write_lock(root, &INDEXBLOCK_KIND)?;
+        let b = cache.exclusive_lock(root, &INDEXBLOCK_KIND)?;
         let mi = MetadataIndex::new(b.loc(), b);
         next = mi.next.get();
         indexes.push(mi);
@@ -330,7 +332,7 @@ pub struct Bitset {
     nr_bits: u64,
     nr_enabled: u64,
     cache: Arc<MetadataCache>,
-    indexes: Vec<MetadataIndex<WriteProxy>>,
+    indexes: Vec<MetadataIndex<ExclusiveProxy>>,
 }
 
 impl Bitset {
@@ -528,9 +530,9 @@ impl Bitset {
 
                 // copy the bitmap if necessary
                 if !src_ie.is_empty() {
-                    let dest_blk = self.cache.write_lock(dest_ie.blocknr, &BITMAP_KIND)?;
+                    let dest_blk = self.cache.exclusive_lock(dest_ie.blocknr, &BITMAP_KIND)?;
                     let mut dest_bm = Bitmap::new(&dest_ie, dest_blk);
-                    let src_blk = self.cache.read_lock(src_ie.blocknr, &BITMAP_KIND)?;
+                    let src_blk = self.cache.shared_lock(src_ie.blocknr, &BITMAP_KIND)?;
                     let src_bm = Bitmap::new(&src_ie, src_blk);
                     dest_bm.copy_from(&src_bm)?;
                 }
@@ -576,7 +578,7 @@ impl Bitset {
             return Ok(false);
         }
 
-        let block = self.cache.read_lock(ie.blocknr, &BITMAP_KIND)?;
+        let block = self.cache.shared_lock(ie.blocknr, &BITMAP_KIND)?;
         let bm = Bitmap::new(&ie, block);
 
         bm.test(Bitmap::offset(bit))
@@ -594,7 +596,7 @@ impl Bitset {
         let block = if ie.is_empty() {
             self.cache.zero_lock(ie.blocknr, &BITMAP_KIND)?
         } else {
-            self.cache.write_lock(ie.blocknr, &BITMAP_KIND)?
+            self.cache.exclusive_lock(ie.blocknr, &BITMAP_KIND)?
         };
 
         let mut bm = Bitmap::new(&ie, block);
@@ -617,7 +619,7 @@ impl Bitset {
             return Ok(());
         }
 
-        let block = self.cache.write_lock(ie.blocknr, &BITMAP_KIND)?;
+        let block = self.cache.exclusive_lock(ie.blocknr, &BITMAP_KIND)?;
         let mut bm = Bitmap::new(&ie, block);
 
         bm.test_and_set(Bitmap::offset(bit), false).and_then(|old| {
@@ -653,7 +655,7 @@ impl Bitset {
                     continue;
                 }
 
-                let block = self.cache.read_lock(ie.blocknr, &BITMAP_KIND)?;
+                let block = self.cache.shared_lock(ie.blocknr, &BITMAP_KIND)?;
                 let bm = Bitmap::new(&ie, block);
 
                 let bit_start = std::cmp::max(start, bi as u64 * ENTRIES_PER_BITMAP as u64);

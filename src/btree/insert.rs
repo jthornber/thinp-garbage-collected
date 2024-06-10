@@ -10,8 +10,8 @@ use crate::packed_array::*;
 
 fn insert_into_internal<
     V: Serializable,
-    INode: NodeW<NodePtr, WriteProxy>,
-    LNode: NodeW<V, WriteProxy>,
+    INode: NodeW<NodePtr, ExclusiveProxy>,
+    LNode: NodeW<V, ExclusiveProxy>,
 >(
     alloc: &mut NodeAlloc,
     n_ptr: NodePtr,
@@ -35,7 +35,7 @@ fn insert_into_internal<
     node_insert_result(alloc, &mut node, idx, &res)
 }
 
-fn insert_into_leaf<V: Serializable, LNode: NodeW<V, WriteProxy>>(
+fn insert_into_leaf<V: Serializable, LNode: NodeW<V, ExclusiveProxy>>(
     alloc: &mut NodeAlloc,
     n_ptr: NodePtr,
     key: u32,
@@ -66,8 +66,8 @@ fn insert_into_leaf<V: Serializable, LNode: NodeW<V, WriteProxy>>(
 
 fn insert_recursive<
     V: Serializable,
-    INode: NodeW<NodePtr, WriteProxy>,
-    LNode: NodeW<V, WriteProxy>,
+    INode: NodeW<NodePtr, ExclusiveProxy>,
+    LNode: NodeW<V, ExclusiveProxy>,
 >(
     alloc: &mut NodeAlloc,
     n_ptr: NodePtr,
@@ -82,7 +82,11 @@ fn insert_recursive<
 }
 
 // Returns the new root
-pub fn insert<V: Serializable, INode: NodeW<NodePtr, WriteProxy>, LNode: NodeW<V, WriteProxy>>(
+pub fn insert<
+    V: Serializable,
+    INode: NodeW<NodePtr, ExclusiveProxy>,
+    LNode: NodeW<V, ExclusiveProxy>,
+>(
     alloc: &mut NodeAlloc,
     root: NodePtr,
     key: u32,

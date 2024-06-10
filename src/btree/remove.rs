@@ -10,8 +10,8 @@ use crate::packed_array::*;
 
 fn remove_internal<
     V: Serializable,
-    INode: NodeW<NodePtr, WriteProxy>,
-    LNode: NodeW<V, WriteProxy>,
+    INode: NodeW<NodePtr, ExclusiveProxy>,
+    LNode: NodeW<V, ExclusiveProxy>,
 >(
     alloc: &mut NodeAlloc,
     n_ptr: NodePtr,
@@ -35,7 +35,7 @@ fn remove_internal<
     node_insert_result(alloc, &mut node, idx, &res)
 }
 
-fn remove_leaf<V: Serializable, LNode: NodeW<V, WriteProxy>>(
+fn remove_leaf<V: Serializable, LNode: NodeW<V, ExclusiveProxy>>(
     alloc: &mut NodeAlloc,
     n_ptr: NodePtr,
     key: u32,
@@ -54,8 +54,8 @@ fn remove_leaf<V: Serializable, LNode: NodeW<V, WriteProxy>>(
 
 fn remove_recurse<
     V: Serializable,
-    INode: NodeW<NodePtr, WriteProxy>,
-    LNode: NodeW<V, WriteProxy>,
+    INode: NodeW<NodePtr, ExclusiveProxy>,
+    LNode: NodeW<V, ExclusiveProxy>,
 >(
     alloc: &mut NodeAlloc,
     n_ptr: NodePtr,
@@ -68,7 +68,11 @@ fn remove_recurse<
     }
 }
 
-pub fn remove<V: Serializable, INode: NodeW<NodePtr, WriteProxy>, LNode: NodeW<V, WriteProxy>>(
+pub fn remove<
+    V: Serializable,
+    INode: NodeW<NodePtr, ExclusiveProxy>,
+    LNode: NodeW<V, ExclusiveProxy>,
+>(
     alloc: &mut NodeAlloc,
     root: NodePtr,
     key: u32,
@@ -103,7 +107,7 @@ enum NodeOp {
 
 type NodeProgram = Vec<NodeOp>;
 
-fn lt_prog<V: Serializable, N: NodeW<V, WriteProxy>>(node: &N, key: u32) -> NodeProgram {
+fn lt_prog<V: Serializable, N: NodeW<V, ExclusiveProxy>>(node: &N, key: u32) -> NodeProgram {
     use NodeOp::*;
 
     if node.nr_entries() == 0 {
@@ -123,7 +127,7 @@ fn lt_prog<V: Serializable, N: NodeW<V, WriteProxy>>(node: &N, key: u32) -> Node
     }
 }
 
-fn remove_lt_internal<V, INode: NodeW<NodePtr, WriteProxy>, LNode: NodeW<V, WriteProxy>>(
+fn remove_lt_internal<V, INode: NodeW<NodePtr, ExclusiveProxy>, LNode: NodeW<V, ExclusiveProxy>>(
     alloc: &mut NodeAlloc,
     n_ptr: NodePtr,
     key: u32,
@@ -168,7 +172,7 @@ where
     Ok(NodeResult::single(&node))
 }
 
-fn remove_lt_leaf<V, LNode: NodeW<V, WriteProxy>>(
+fn remove_lt_leaf<V, LNode: NodeW<V, ExclusiveProxy>>(
     alloc: &mut NodeAlloc,
     n_ptr: NodePtr,
     key: u32,
@@ -211,8 +215,8 @@ where
 
 pub fn remove_lt_recurse<
     V: Serializable,
-    INode: NodeW<NodePtr, WriteProxy>,
-    LNode: NodeW<V, WriteProxy>,
+    INode: NodeW<NodePtr, ExclusiveProxy>,
+    LNode: NodeW<V, ExclusiveProxy>,
 >(
     alloc: &mut NodeAlloc,
     n_ptr: NodePtr,
@@ -228,8 +232,8 @@ pub fn remove_lt_recurse<
 
 pub fn remove_lt<
     V: Serializable,
-    INode: NodeW<NodePtr, WriteProxy>,
-    LNode: NodeW<V, WriteProxy>,
+    INode: NodeW<NodePtr, ExclusiveProxy>,
+    LNode: NodeW<V, ExclusiveProxy>,
 >(
     alloc: &mut NodeAlloc,
     root: NodePtr,
@@ -244,7 +248,7 @@ pub fn remove_lt<
 
 //-------------------------------------------------------------------------
 
-fn geq_prog<V: Serializable, N: NodeW<V, WriteProxy>>(node: &N, key: u32) -> NodeProgram {
+fn geq_prog<V: Serializable, N: NodeW<V, ExclusiveProxy>>(node: &N, key: u32) -> NodeProgram {
     use NodeOp::*;
 
     let nr_entries = node.nr_entries();
@@ -270,7 +274,7 @@ fn geq_prog<V: Serializable, N: NodeW<V, WriteProxy>>(node: &N, key: u32) -> Nod
     }
 }
 
-fn remove_geq_internal<V, INode: NodeW<NodePtr, WriteProxy>, LNode: NodeW<V, WriteProxy>>(
+fn remove_geq_internal<V, INode: NodeW<NodePtr, ExclusiveProxy>, LNode: NodeW<V, ExclusiveProxy>>(
     alloc: &mut NodeAlloc,
     n_ptr: NodePtr,
     key: u32,
@@ -315,7 +319,7 @@ where
     Ok(NodeResult::single(&node))
 }
 
-fn remove_geq_leaf<V, LNode: NodeW<V, WriteProxy>>(
+fn remove_geq_leaf<V, LNode: NodeW<V, ExclusiveProxy>>(
     alloc: &mut NodeAlloc,
     n_ptr: NodePtr,
     key: u32,
@@ -358,8 +362,8 @@ where
 
 fn remove_geq_recurse<
     V: Serializable,
-    INode: NodeW<NodePtr, WriteProxy>,
-    LNode: NodeW<V, WriteProxy>,
+    INode: NodeW<NodePtr, ExclusiveProxy>,
+    LNode: NodeW<V, ExclusiveProxy>,
 >(
     alloc: &mut NodeAlloc,
     n_ptr: NodePtr,
@@ -375,8 +379,8 @@ fn remove_geq_recurse<
 
 pub fn remove_geq<
     V: Serializable,
-    INode: NodeW<NodePtr, WriteProxy>,
-    LNode: NodeW<V, WriteProxy>,
+    INode: NodeW<NodePtr, ExclusiveProxy>,
+    LNode: NodeW<V, ExclusiveProxy>,
 >(
     alloc: &mut NodeAlloc,
     root: NodePtr,
@@ -399,7 +403,7 @@ enum KeyLoc {
 }
 
 // The key must be >= to the first key in the node.
-fn key_search<V: Serializable, N: NodeW<V, WriteProxy>>(node: &N, k: u32) -> KeyLoc {
+fn key_search<V: Serializable, N: NodeW<V, ExclusiveProxy>>(node: &N, k: u32) -> KeyLoc {
     let idx = node.lower_bound(k);
 
     assert!(idx >= 0);
@@ -413,7 +417,7 @@ fn key_search<V: Serializable, N: NodeW<V, WriteProxy>>(node: &N, k: u32) -> Key
 }
 
 // All indexes in the program are *before* any operations were executed
-fn range_split<V: Serializable, N: NodeW<V, WriteProxy>>(
+fn range_split<V: Serializable, N: NodeW<V, ExclusiveProxy>>(
     node: &N,
     key_begin: u32,
     key_end: u32,
@@ -474,7 +478,11 @@ fn range_split<V: Serializable, N: NodeW<V, WriteProxy>>(
     }
 }
 
-fn remove_range_internal<V, INode: NodeW<NodePtr, WriteProxy>, LNode: NodeW<V, WriteProxy>>(
+fn remove_range_internal<
+    V,
+    INode: NodeW<NodePtr, ExclusiveProxy>,
+    LNode: NodeW<V, ExclusiveProxy>,
+>(
     alloc: &mut NodeAlloc,
     n_ptr: NodePtr,
     key_begin: u32,
@@ -538,7 +546,7 @@ where
     Ok(NodeResult::single(&node))
 }
 
-fn remove_range_leaf<V: Serializable + Copy, LNode: NodeW<V, WriteProxy>>(
+fn remove_range_leaf<V: Serializable + Copy, LNode: NodeW<V, ExclusiveProxy>>(
     alloc: &mut NodeAlloc,
     n_ptr: NodePtr,
     key_begin: u32,
@@ -618,8 +626,8 @@ fn remove_range_leaf<V: Serializable + Copy, LNode: NodeW<V, WriteProxy>>(
 
 fn remove_range_recurse<
     V: Serializable + Copy,
-    INode: NodeW<NodePtr, WriteProxy>,
-    LNode: NodeW<V, WriteProxy>,
+    INode: NodeW<NodePtr, ExclusiveProxy>,
+    LNode: NodeW<V, ExclusiveProxy>,
 >(
     alloc: &mut NodeAlloc,
     n_ptr: NodePtr,
@@ -639,8 +647,8 @@ fn remove_range_recurse<
 
 pub fn remove_range<
     V: Serializable + Copy,
-    INode: NodeW<NodePtr, WriteProxy>,
-    LNode: NodeW<V, WriteProxy>,
+    INode: NodeW<NodePtr, ExclusiveProxy>,
+    LNode: NodeW<V, ExclusiveProxy>,
 >(
     alloc: &mut NodeAlloc,
     root: NodePtr,

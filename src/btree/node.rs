@@ -14,8 +14,8 @@ pub enum BTreeFlags {
     Leaf = 1,
 }
 
-impl From<u32> for BTreeFlags {
-    fn from(value: u32) -> Self {
+impl From<u16> for BTreeFlags {
+    fn from(value: u16) -> Self {
         match value {
             0 => BTreeFlags::Internal,
             1 => BTreeFlags::Leaf,
@@ -31,18 +31,22 @@ pub const NODE_HEADER_SIZE: usize = 16;
 
 // We have a standard node header that is the same for all
 // implementations.
-// FIXME: merge kind and flags.
 pub struct NodeHeader {
-    pub kind: u32, // eg, SimpleNode, BlockTimeNode
     pub seq_nr: u32,
+
+    // Shadow op will trigger COW if the current time is higher than this
+    pub snap_time: u32,
+
     pub flags: BTreeFlags,
+    pub kind: u16, // eg, SimpleNode, BlockTimeNode
     pub nr_entries: u32,
 }
 
 pub fn write_node_header<W: Write>(w: &mut W, hdr: &NodeHeader) -> Result<()> {
-    w.write_u32::<LittleEndian>(hdr.kind)?;
     w.write_u32::<LittleEndian>(hdr.seq_nr)?;
-    w.write_u32::<LittleEndian>(hdr.flags as u32)?;
+    w.write_u32::<LittleEndian>(hdr.snap_time)?;
+    w.write_u16::<LittleEndian>(hdr.flags as u16)?;
+    w.write_u16::<LittleEndian>(hdr.kind)?;
     w.write_u32::<LittleEndian>(hdr.nr_entries)?;
 
     Ok(())
@@ -51,13 +55,16 @@ pub fn write_node_header<W: Write>(w: &mut W, hdr: &NodeHeader) -> Result<()> {
 pub fn read_node_header<R: Read>(r: &mut R) -> Result<NodeHeader> {
     let kind = r.read_u32::<LittleEndian>()?;
     let seq_nr = r.read_u32::<LittleEndian>()?;
-    let flags = BTreeFlags::from(r.read_u32::<LittleEndian>()?);
+    let snap_time = r.read_u32::<LittleEndian>()?;
+    let flags = BTreeFlags::from(r.read_u16::<LittleEndian>()?);
+    let kind = r.read_u16::<LittleEndian>()?;
     let nr_entries = r.read_u32::<LittleEndian>()?;
 
     Ok(NodeHeader {
-        kind,
         seq_nr,
+        snap_time,
         flags,
+        kind,
         nr_entries,
     })
 }

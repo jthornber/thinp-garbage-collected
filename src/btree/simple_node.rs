@@ -7,7 +7,7 @@ use crate::packed_array::*;
 
 //-------------------------------------------------------------------------
 
-pub const SIMPLE_NODE_KIND: u32 = 0;
+pub const SIMPLE_NODE_KIND: u16 = 0;
 
 #[allow(dead_code)]
 pub struct SimpleNode<V: Serializable, Data: Readable> {
@@ -15,9 +15,10 @@ pub struct SimpleNode<V: Serializable, Data: Readable> {
     // This doesn't get written to disk.
     pub loc: u32,
 
-    pub kind: U32<Data>,
     pub seq_nr: U32<Data>,
-    pub flags: U32<Data>,
+    pub snap_time: U32<Data>,
+    pub flags: U16<Data>,
+    pub kind: U16<Data>,
     pub nr_entries: U32<Data>,
 
     pub keys: PArray<u32, Data>,
@@ -26,24 +27,27 @@ pub struct SimpleNode<V: Serializable, Data: Readable> {
 
 impl<V: Serializable, Data: Readable> SimpleNode<V, Data> {
     pub fn new(loc: u32, data: Data) -> Self {
-        let (kind, data) = data.split_at(4);
         let (seq_nr, data) = data.split_at(4);
-        let (flags, data) = data.split_at(4);
+        let (snap_time, data) = data.split_at(4);
+        let (flags, data) = data.split_at(2);
+        let (kind, data) = data.split_at(2);
         let (nr_entries, data) = data.split_at(4);
         let (keys, values) = data.split_at(Self::max_entries() * std::mem::size_of::<u32>());
 
-        let kind = U32::new(kind);
         let seq_nr = U32::new(seq_nr);
-        let flags = U32::new(flags);
+        let snap_time = U32::new(snap_time);
+        let flags = U16::new(flags);
+        let kind = U16::new(kind);
         let nr_entries = U32::new(nr_entries);
         let keys = PArray::new(keys, nr_entries.get() as usize);
         let values = PArray::new(values, nr_entries.get() as usize);
 
         Self {
             loc,
-            kind,
             seq_nr,
+            snap_time,
             flags,
+            kind,
             nr_entries,
             keys,
             values,
@@ -116,13 +120,14 @@ impl<V: Serializable, Data: Writeable> NodeW<V, Data> for SimpleNode<V, Data> {
         // initialise the block
         let mut w = std::io::Cursor::new(data.rw());
         let hdr = NodeHeader {
-            kind: SIMPLE_NODE_KIND,
             seq_nr: 0,
+            snap_time: 0,
             flags: if is_leaf {
                 BTreeFlags::Leaf
             } else {
                 BTreeFlags::Internal
             },
+            kind: SIMPLE_NODE_KIND,
             nr_entries: 0,
         };
 

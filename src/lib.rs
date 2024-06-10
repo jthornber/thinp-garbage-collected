@@ -1,5 +1,4 @@
 // FIXME: not all of these need to be public
-pub mod bitset;
 pub mod block_allocator;
 pub mod block_cache;
 pub mod btree;

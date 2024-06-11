@@ -1,8 +1,5 @@
-use mlua::{
-    FromLua, Function, Lua, MetaMethod, Result, UserData, UserDataMethods, Value, Variadic,
-};
-use std::io::{self, Write};
-use tracing::{info, Level};
+use mlua::{Lua, Result};
+use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 
 //-------------------------------------------------------------------------

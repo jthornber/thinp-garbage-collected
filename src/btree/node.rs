@@ -1,10 +1,15 @@
 use anyhow::Result;
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use std::io::{self, Read, Write};
+use std::io::{Read, Write};
 
 use crate::block_cache::*;
 use crate::byte_types::*;
 use crate::packed_array::*;
+
+//-------------------------------------------------------------------------
+
+pub use crate::btree::NodePtr;
+pub use crate::btree::SequenceNr;
 
 //-------------------------------------------------------------------------
 
@@ -71,34 +76,6 @@ pub fn read_node_header<R: Read>(r: &mut R) -> Result<NodeHeader> {
 pub fn read_flags(r_proxy: &SharedProxy) -> Result<BTreeFlags> {
     let hdr = read_node_header(&mut r_proxy.r())?;
     Ok(hdr.flags)
-}
-
-//-------------------------------------------------------------------------
-
-pub type SequenceNr = u32;
-
-#[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord)]
-pub struct NodePtr {
-    pub loc: MetadataBlock,
-    pub seq_nr: SequenceNr,
-}
-
-impl Serializable for NodePtr {
-    fn packed_len() -> usize {
-        8
-    }
-
-    fn pack<W: Write>(&self, w: &mut W) -> io::Result<()> {
-        w.write_u32::<LittleEndian>(self.loc)?;
-        w.write_u32::<LittleEndian>(self.seq_nr)?;
-        Ok(())
-    }
-
-    fn unpack<R: Read>(r: &mut R) -> io::Result<Self> {
-        let loc = r.read_u32::<LittleEndian>()?;
-        let seq_nr = r.read_u32::<LittleEndian>()?;
-        Ok(NodePtr { loc, seq_nr })
-    }
 }
 
 //-------------------------------------------------------------------------

@@ -1,3 +1,7 @@
+#![allow(unused)]
+
+// FIXME: remove the above
+
 // FIXME: not all of these need to be public
 mod block_cache;
 mod btree;

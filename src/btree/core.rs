@@ -1,5 +1,4 @@
-use anyhow::{ensure, Result};
-use std::collections::BTreeSet;
+use anyhow::Result;
 use std::sync::Arc;
 
 use crate::block_cache::*;

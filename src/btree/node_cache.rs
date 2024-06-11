@@ -1,4 +1,4 @@
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 use std::sync::{Arc, Mutex};
 
 use crate::block_cache::*;
@@ -45,7 +45,7 @@ impl NodeCacheInner {
         } else {
             // FIXME: resize the node file
             panic!("out of nodes");
-            Err(anyhow!("couldn't allocate new block"))
+            // Err(anyhow!("couldn't allocate new block"))
         }
     }
 

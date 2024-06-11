@@ -1,10 +1,8 @@
 use anyhow::{ensure, Result};
 use std::collections::BTreeSet;
-use std::sync::Arc;
 
 use crate::block_cache::*;
 use crate::btree::node::*;
-use crate::btree::node_cache::*;
 use crate::packed_array::*;
 
 use crate::btree::BTree;

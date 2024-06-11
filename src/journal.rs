@@ -7,7 +7,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 use crate::block_cache::*;
-use crate::btree::node::*;
+use crate::btree::*;
 use crate::slab::*;
 use crate::types::*;
 

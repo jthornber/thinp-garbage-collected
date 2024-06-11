@@ -116,7 +116,7 @@ impl<V: Serializable, Data: Readable> NodeR<V, Data> for SimpleNode<V, Data> {
 }
 
 impl<V: Serializable, Data: Writeable> NodeW<V, Data> for SimpleNode<V, Data> {
-    fn init(loc: MetadataBlock, mut data: Data, is_leaf: bool) -> Result<()> {
+    fn init(_loc: MetadataBlock, mut data: Data, is_leaf: bool) -> Result<()> {
         // initialise the block
         let mut w = std::io::Cursor::new(data.rw());
         let hdr = NodeHeader {

@@ -65,7 +65,7 @@ mod test {
     }
 
     impl Fixture {
-        fn new(nr_metadata_blocks: u32, nr_data_blocks: u64) -> Result<Self> {
+        fn new(nr_metadata_blocks: u32, _nr_data_blocks: u64) -> Result<Self> {
             // We only cope with powers of two atm.
             assert!(nr_metadata_blocks.count_ones() == 1);
 

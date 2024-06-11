@@ -57,8 +57,7 @@ impl<
         })
     }
 
-    // FIXME: name clash with trait
-    pub fn clone(&self) -> Self {
+    pub fn snap(&self) -> Self {
         Self {
             cache: self.cache.clone(),
             root: self.root,
@@ -325,7 +324,7 @@ mod test {
             Self {
                 engine: self.engine.clone(),
                 cache: self.cache.clone(),
-                tree: self.tree.clone(),
+                tree: self.tree.snap(),
             }
         }
 

@@ -17,12 +17,14 @@ pub struct BTree<V: Serializable + Copy, INodeR, INodeW, LNodeR, LNodeW> {
     phantom_lnode_w: std::marker::PhantomData<LNodeW>,
 }
 
-pub mod btree; // FIXME: move into this file
+mod btree;
+mod check;
 mod insert;
 mod lookup;
 pub mod node;
 mod node_cache;
 mod remove;
 mod simple_node;
+mod tests;
 
 //-------------------------------------------------------------------------

@@ -38,7 +38,7 @@ impl NodeCacheInner {
         &mut self,
         is_leaf: bool,
     ) -> Result<Node> {
-        if let Some(loc) = self.alloc.alloc(1) {
+        if let Ok(loc) = self.alloc.alloc(1) {
             let new = self.cache.zero_lock(loc as u32)?;
             Node::init(loc as u32, new.clone(), is_leaf)?;
             Node::open(loc as u32, new)
@@ -59,7 +59,7 @@ impl NodeCacheInner {
 
         if snap_time > hdr.snap_time {
             // copy needed
-            if let Some(loc) = self.alloc.alloc(1) {
+            if let Ok(loc) = self.alloc.alloc(1) {
                 let mut new = self.cache.zero_lock(loc as u32)?;
                 new.rw()[0..].copy_from_slice(&old.r()[0..]);
                 Node::open(loc as u32, new)

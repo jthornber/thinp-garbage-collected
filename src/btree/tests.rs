@@ -71,8 +71,7 @@ mod test {
 
             let engine = mk_engine(nr_metadata_blocks);
             let block_cache = Arc::new(BlockCache::new(engine.clone(), 16)?);
-            let order = nr_metadata_blocks.trailing_zeros();
-            let alloc = BuddyAllocator::new(order as usize);
+            let alloc = BuddyAllocator::new(nr_metadata_blocks as u64);
             let node_cache = Arc::new(NodeCache::new(block_cache, alloc));
             let tree = BTree::empty_tree(node_cache.clone())?;
 

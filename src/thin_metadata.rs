@@ -39,8 +39,8 @@ enum Run {
 impl Pool {
     pub fn create<P: AsRef<Path>>(
         dir: P,
-        metadata_order: usize,
-        data_order: usize,
+        nr_metadata_blocks: u64,
+        nr_data_blocks: u64,
     ) -> Result<Self> {
         let dir = dir.as_ref();
 
@@ -52,20 +52,20 @@ impl Pool {
 
         // Create the node file in dir, this should have size 4k * 2^metadata_order
         let node_file_path = dir.join("node_file");
-        let node_file_size = 4096 * (1 << metadata_order);
+        let node_file_size = 4096 * nr_metadata_blocks;
         let node_file = OpenOptions::new()
             .write(true)
             .create_new(true)
             .open(node_file_path)?;
-        node_file.set_len(node_file_size as u64)?;
+        node_file.set_len(node_file_size)?;
 
         // Create journal in dir
         let journal_file_path = dir.join("journal");
         let journal = Journal::create(journal_file_path)?;
 
         // Initialize the buddy allocators
-        let meta_alloc = BuddyAllocator::new(metadata_order);
-        let data_alloc = BuddyAllocator::new(data_order);
+        let meta_alloc = BuddyAllocator::new(nr_metadata_blocks);
+        let data_alloc = BuddyAllocator::new(nr_data_blocks);
         Ok(Pool {
             journal,
             devs: BTreeMap::new(),

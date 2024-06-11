@@ -143,6 +143,7 @@ pub fn redistribute2<V: Serializable, Node: NodeW<V, ExclusiveProxy>>(
     }
 }
 
+// FIXME: do we want to move this into BTRree? and redistribute2?
 pub fn ensure_space<
     V: Serializable,
     Node: NodeW<V, ExclusiveProxy>,
@@ -168,36 +169,6 @@ pub fn ensure_space<
             }
 
             Ok(NodeResult::pair(left, &right))
-        }
-    }
-}
-
-// Call this when recursing back up the spine
-pub fn node_insert_result<Node: NodeW<NodePtr, ExclusiveProxy>>(
-    cache: &NodeCache,
-    node: &mut Node,
-    idx: usize,
-    res: &NodeResult,
-) -> Result<NodeResult> {
-    use NodeResult::*;
-
-    match res {
-        Single(NodeInfo { key_min: None, .. }) => {
-            node.remove_at(idx);
-            Ok(NodeResult::single(node))
-        }
-        Single(NodeInfo {
-            key_min: Some(new_key),
-            n_ptr,
-        }) => {
-            node.overwrite(idx, *new_key, n_ptr);
-            Ok(NodeResult::single(node))
-        }
-        Pair(left, right) => {
-            node.overwrite(idx, left.key_min.unwrap(), &left.n_ptr);
-            ensure_space(cache, node, idx, |node, idx| {
-                node.insert(idx + 1, right.key_min.unwrap(), &right.n_ptr)
-            })
         }
     }
 }

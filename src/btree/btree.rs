@@ -1,26 +1,15 @@
 use anyhow::{ensure, Result};
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::BTreeSet;
 use std::sync::Arc;
 
 use crate::block_cache::*;
-use crate::btree::insert;
-use crate::btree::lookup;
 use crate::btree::node::*;
 use crate::btree::node_cache::*;
-use crate::btree::remove;
 use crate::packed_array::*;
 
-//-------------------------------------------------------------------------
+use crate::btree::BTree;
 
-pub struct BTree<V: Serializable + Copy, INodeR, INodeW, LNodeR, LNodeW> {
-    cache: Arc<NodeCache>,
-    root: NodePtr,
-    phantom_v: std::marker::PhantomData<V>,
-    phantom_inode_r: std::marker::PhantomData<INodeR>,
-    phantom_inode_w: std::marker::PhantomData<INodeW>,
-    phantom_lnode_r: std::marker::PhantomData<LNodeR>,
-    phantom_lnode_w: std::marker::PhantomData<LNodeW>,
-}
+//-------------------------------------------------------------------------
 
 impl<
         V: Serializable + Copy,
@@ -34,6 +23,7 @@ impl<
         Self {
             cache,
             root,
+            snap_time: 0,
             phantom_v: std::marker::PhantomData,
             phantom_inode_r: std::marker::PhantomData,
             phantom_inode_w: std::marker::PhantomData,
@@ -49,6 +39,7 @@ impl<
         Ok(Self {
             cache,
             root,
+            snap_time: 0,
             phantom_v: std::marker::PhantomData,
             phantom_inode_r: std::marker::PhantomData,
             phantom_inode_w: std::marker::PhantomData,
@@ -57,10 +48,13 @@ impl<
         })
     }
 
-    pub fn snap(&self) -> Self {
+    pub fn snap(&mut self, snap_time: u32) -> Self {
+        self.snap_time = snap_time;
+
         Self {
             cache: self.cache.clone(),
             root: self.root,
+            snap_time,
             phantom_v: std::marker::PhantomData,
             phantom_inode_r: std::marker::PhantomData,
             phantom_inode_w: std::marker::PhantomData,
@@ -75,72 +69,34 @@ impl<
 
     //-------------------------------
 
-    pub fn lookup(&self, key: u32) -> Result<Option<V>> {
-        lookup::lookup::<V, INodeR, LNodeR>(&self.cache, self.root, key)
-    }
-
-    pub fn insert(&mut self, key: u32, value: &V) -> Result<()> {
-        self.root =
-            insert::insert::<V, INodeW, LNodeW>(self.cache.as_ref(), self.root, key, value)?;
-        Ok(())
-    }
-
-    pub fn remove(&mut self, key: u32) -> Result<()> {
-        let root = remove::remove::<V, INodeW, LNodeW>(self.cache.as_ref(), self.root, key)?;
-        self.root = root;
-        Ok(())
-    }
-
-    pub fn remove_geq(&mut self, key: u32, val_fn: &ValFn<V>) -> Result<()> {
-        let new_root =
-            remove::remove_geq::<V, INodeW, LNodeW>(self.cache.as_ref(), self.root, key, val_fn)?;
-        self.root = new_root;
-        Ok(())
-    }
-
-    pub fn remove_lt(&mut self, key: u32, val_fn: &ValFn<V>) -> Result<()> {
-        let new_root =
-            remove::remove_lt::<V, INodeW, LNodeW>(self.cache.as_ref(), self.root, key, val_fn)?;
-        self.root = new_root;
-        Ok(())
-    }
-
-    //-------------------------------
-
-    /// Returns a vec of key, value pairs
-    pub fn lookup_range(
-        &self,
-        key_begin: u32,
-        key_end: u32,
-        select_above: &ValFn<V>,
-        select_below: &ValFn<V>,
-    ) -> Result<Vec<(u32, V)>> {
-        lookup::lookup_range::<V, INodeR, LNodeR>(
-            self.cache.as_ref(),
-            self.root,
-            key_begin,
-            key_end,
-            select_below,
-            select_above,
-        )
-    }
-
-    pub fn remove_range(
+    // Call this when recursing back up the spine
+    pub fn node_insert_result(
         &mut self,
-        key_begin: u32,
-        key_end: u32,
-        val_lt: &ValFn<V>,
-        val_geq: &ValFn<V>,
-    ) -> Result<()> {
-        self.root = remove::remove_range::<V, INodeW, LNodeW>(
-            self.cache.as_ref(),
-            self.root,
-            key_begin,
-            key_end,
-            val_lt,
-            val_geq,
-        )?;
-        Ok(())
+        node: &mut INodeW,
+        idx: usize,
+        res: &NodeResult,
+    ) -> Result<NodeResult> {
+        use NodeResult::*;
+
+        match res {
+            Single(NodeInfo { key_min: None, .. }) => {
+                node.remove_at(idx);
+                Ok(NodeResult::single(node))
+            }
+            Single(NodeInfo {
+                key_min: Some(new_key),
+                n_ptr,
+            }) => {
+                node.overwrite(idx, *new_key, n_ptr);
+                Ok(NodeResult::single(node))
+            }
+            Pair(left, right) => {
+                node.overwrite(idx, left.key_min.unwrap(), &left.n_ptr);
+                ensure_space(self.cache.as_ref(), node, idx, |node, idx| {
+                    node.insert(idx + 1, right.key_min.unwrap(), &right.n_ptr)
+                })
+            }
+        }
     }
 
     //-------------------------------

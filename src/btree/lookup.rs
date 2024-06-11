@@ -5,38 +5,45 @@ use crate::btree::node::*;
 use crate::btree::node_cache::*;
 use crate::packed_array::*;
 
+use crate::btree::BTree;
+
 //-------------------------------------------------------------------------
 
-pub fn lookup<V: Serializable, INode: NodeR<NodePtr, SharedProxy>, LNode: NodeR<V, SharedProxy>>(
-    cache: &NodeCache,
-    root: NodePtr,
-    key: u32,
-) -> Result<Option<V>> {
-    let mut n_ptr = root;
+impl<
+        V: Serializable + Copy,
+        INodeR: NodeR<NodePtr, SharedProxy>,
+        INodeW: NodeW<NodePtr, ExclusiveProxy>,
+        LNodeR: NodeR<V, SharedProxy>,
+        LNodeW: NodeW<V, ExclusiveProxy>,
+    > BTree<V, INodeR, INodeW, LNodeR, LNodeW>
+{
+    pub fn lookup(&self, key: u32) -> Result<Option<V>> {
+        let mut n_ptr = self.root;
 
-    loop {
-        if cache.is_internal(n_ptr)? {
-            let node: INode = cache.read(n_ptr)?;
+        loop {
+            if self.cache.is_internal(n_ptr)? {
+                let node: INodeR = self.cache.read(n_ptr)?;
 
-            let idx = node.lower_bound(key);
-            if idx < 0 || idx >= node.nr_entries() as isize {
-                return Ok(None);
-            }
+                let idx = node.lower_bound(key);
+                if idx < 0 || idx >= node.nr_entries() as isize {
+                    return Ok(None);
+                }
 
-            n_ptr = node.get_value(idx as usize);
-        } else {
-            let node: LNode = cache.read(n_ptr)?;
-
-            let idx = node.lower_bound(key);
-            if idx < 0 || idx >= node.nr_entries() as isize {
-                return Ok(None);
-            }
-
-            return if node.get_key(idx as usize) == key {
-                Ok(node.get_value_safe(idx as usize))
+                n_ptr = node.get_value(idx as usize);
             } else {
-                Ok(None)
-            };
+                let node: LNodeR = self.cache.read(n_ptr)?;
+
+                let idx = node.lower_bound(key);
+                if idx < 0 || idx >= node.nr_entries() as isize {
+                    return Ok(None);
+                }
+
+                return if node.get_key(idx as usize) == key {
+                    Ok(node.get_value_safe(idx as usize))
+                } else {
+                    Ok(None)
+                };
+            }
         }
     }
 }
@@ -373,31 +380,37 @@ fn select_above_below<
     Ok(())
 }
 
-// FIXME: We should probably take a results vec to save reallocating on every lookup.  Fine for now
-// though.
-pub fn lookup_range<
-    V: Serializable,
-    INode: NodeR<NodePtr, SharedProxy>,
-    LNode: NodeR<V, SharedProxy>,
->(
-    cache: &NodeCache,
-    root: NodePtr,
-    key_begin: u32,
-    key_end: u32,
-    val_below: &ValFn<V>,
-    val_above: &ValFn<V>,
-) -> Result<Vec<(u32, V)>> {
-    let mut results = Vec::with_capacity(16);
-    select_above_below::<V, INode, LNode>(
-        cache,
-        root,
-        key_begin,
-        key_end,
-        val_below,
-        val_above,
-        &mut results,
-    )?;
-    Ok(results)
+impl<
+        V: Serializable + Copy,
+        INodeR: NodeR<NodePtr, SharedProxy>,
+        INodeW: NodeW<NodePtr, ExclusiveProxy>,
+        LNodeR: NodeR<V, SharedProxy>,
+        LNodeW: NodeW<V, ExclusiveProxy>,
+    > BTree<V, INodeR, INodeW, LNodeR, LNodeW>
+{
+    /// Returns a vec of key, value pairs
+    pub fn lookup_range(
+        &self,
+        key_begin: u32,
+        key_end: u32,
+        select_above: &ValFn<V>,
+        select_below: &ValFn<V>,
+    ) -> Result<Vec<(u32, V)>> {
+        let mut results = Vec::with_capacity(16);
+
+        // FIXME: order of select_* params changes?
+        select_above_below::<V, INodeR, LNodeR>(
+            self.cache.as_ref(),
+            self.root,
+            key_begin,
+            key_end,
+            select_above,
+            select_below,
+            &mut results,
+        )?;
+
+        Ok(results)
+    }
 }
 
 //-------------------------------------------------------------------------

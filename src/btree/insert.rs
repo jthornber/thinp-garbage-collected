@@ -6,104 +6,95 @@ use crate::btree::node::*;
 use crate::btree::node_cache::*;
 use crate::packed_array::*;
 
+use crate::btree::BTree;
+
 //-------------------------------------------------------------------------
 
-fn insert_into_internal<
-    V: Serializable,
-    INode: NodeW<NodePtr, ExclusiveProxy>,
-    LNode: NodeW<V, ExclusiveProxy>,
->(
-    cache: &NodeCache,
-    n_ptr: NodePtr,
-    key: u32,
-    value: &V,
-) -> Result<NodeResult> {
-    let mut node = cache.shadow::<NodePtr, INode>(n_ptr, 0)?;
+impl<
+        V: Serializable + Copy,
+        INodeR: NodeR<NodePtr, SharedProxy>,
+        INodeW: NodeW<NodePtr, ExclusiveProxy>,
+        LNodeR: NodeR<V, SharedProxy>,
+        LNodeW: NodeW<V, ExclusiveProxy>,
+    > BTree<V, INodeR, INodeW, LNodeR, LNodeW>
+{
+    fn insert_into_internal(&mut self, n_ptr: NodePtr, key: u32, value: &V) -> Result<NodeResult> {
+        let mut node = self.cache.shadow::<NodePtr, INodeW>(n_ptr, 0)?;
 
-    let mut idx = node.lower_bound(key);
-    if idx < 0 {
-        idx = 0
-    }
-
-    if idx > 0 && idx == node.nr_entries() as isize {
-        idx -= 1;
-    }
-
-    let idx = idx as usize;
-    let child_loc = node.get_value(idx);
-    let res = insert_recursive::<V, INode, LNode>(cache, child_loc, key, value)?;
-    node_insert_result(cache, &mut node, idx, &res)
-}
-
-fn insert_into_leaf<V: Serializable, LNode: NodeW<V, ExclusiveProxy>>(
-    cache: &NodeCache,
-    n_ptr: NodePtr,
-    key: u32,
-    value: &V,
-) -> Result<NodeResult> {
-    let mut node = cache.shadow::<V, LNode>(n_ptr, 0)?;
-    let idx = node.lower_bound(key);
-
-    if idx < 0 {
-        ensure_space(cache, &mut node, idx as usize, |node, _idx| {
-            node.prepend(slice::from_ref(&key), slice::from_ref(value))
-        })
-    } else if idx as usize >= node.nr_entries() {
-        ensure_space(cache, &mut node, idx as usize, |node, _idx| {
-            node.append(slice::from_ref(&key), slice::from_ref(value))
-        })
-    } else if node.get_key(idx as usize) == key {
-        // overwrite
-        ensure_space(cache, &mut node, idx as usize, |node, idx| {
-            node.overwrite(idx, key, value)
-        })
-    } else {
-        ensure_space(cache, &mut node, idx as usize, |node, idx| {
-            node.insert(idx + 1, key, value)
-        })
-    }
-}
-
-fn insert_recursive<
-    V: Serializable,
-    INode: NodeW<NodePtr, ExclusiveProxy>,
-    LNode: NodeW<V, ExclusiveProxy>,
->(
-    alloc: &NodeCache,
-    n_ptr: NodePtr,
-    key: u32,
-    value: &V,
-) -> Result<NodeResult> {
-    if alloc.is_internal(n_ptr)? {
-        insert_into_internal::<V, INode, LNode>(alloc, n_ptr, key, value)
-    } else {
-        insert_into_leaf::<V, LNode>(alloc, n_ptr, key, value)
-    }
-}
-
-// Returns the new root
-pub fn insert<
-    V: Serializable,
-    INode: NodeW<NodePtr, ExclusiveProxy>,
-    LNode: NodeW<V, ExclusiveProxy>,
->(
-    cache: &NodeCache,
-    root: NodePtr,
-    key: u32,
-    value: &V,
-) -> Result<NodePtr> {
-    use NodeResult::*;
-
-    match insert_recursive::<V, INode, LNode>(cache, root, key, value)? {
-        Single(NodeInfo { n_ptr, .. }) => Ok(n_ptr),
-        Pair(left, right) => {
-            let mut parent: INode = cache.new_node(false)?;
-            parent.append(
-                &[left.key_min.unwrap(), right.key_min.unwrap()],
-                &[left.n_ptr, right.n_ptr],
-            );
-            Ok(parent.n_ptr())
+        let mut idx = node.lower_bound(key);
+        if idx < 0 {
+            idx = 0
         }
+
+        if idx > 0 && idx == node.nr_entries() as isize {
+            idx -= 1;
+        }
+
+        let idx = idx as usize;
+        let child_loc = node.get_value(idx);
+        let res = self.insert_recursive(child_loc, key, value)?;
+        self.node_insert_result(&mut node, idx, &res)
+    }
+
+    fn insert_into_leaf(&mut self, n_ptr: NodePtr, key: u32, value: &V) -> Result<NodeResult> {
+        let mut node = self.cache.shadow::<V, LNodeW>(n_ptr, 0)?;
+        let idx = node.lower_bound(key);
+
+        if idx < 0 {
+            ensure_space(
+                self.cache.as_ref(),
+                &mut node,
+                idx as usize,
+                |node, _idx| node.prepend(slice::from_ref(&key), slice::from_ref(value)),
+            )
+        } else if idx as usize >= node.nr_entries() {
+            ensure_space(
+                self.cache.as_ref(),
+                &mut node,
+                idx as usize,
+                |node, _idx| node.append(slice::from_ref(&key), slice::from_ref(value)),
+            )
+        } else if node.get_key(idx as usize) == key {
+            // overwrite
+            ensure_space(self.cache.as_ref(), &mut node, idx as usize, |node, idx| {
+                node.overwrite(idx, key, value)
+            })
+        } else {
+            ensure_space(self.cache.as_ref(), &mut node, idx as usize, |node, idx| {
+                node.insert(idx + 1, key, value)
+            })
+        }
+    }
+
+    fn insert_recursive(&mut self, n_ptr: NodePtr, key: u32, value: &V) -> Result<NodeResult> {
+        if self.cache.is_internal(n_ptr)? {
+            self.insert_into_internal(n_ptr, key, value)
+        } else {
+            self.insert_into_leaf(n_ptr, key, value)
+        }
+    }
+
+    // Returns the new root
+    pub fn insert_(&mut self, root: NodePtr, key: u32, value: &V) -> Result<NodePtr> {
+        use NodeResult::*;
+
+        match self.insert_recursive(root, key, value)? {
+            Single(NodeInfo { n_ptr, .. }) => Ok(n_ptr),
+            Pair(left, right) => {
+                let mut parent: INodeW = self.cache.new_node(false)?;
+                parent.append(
+                    &[left.key_min.unwrap(), right.key_min.unwrap()],
+                    &[left.n_ptr, right.n_ptr],
+                );
+                Ok(parent.n_ptr())
+            }
+        }
+    }
+
+    // FIXME: merge with insert_
+    pub fn insert(&mut self, key: u32, value: &V) -> Result<()> {
+        self.root = self.insert_(self.root, key, value)?;
+        Ok(())
     }
 }
 

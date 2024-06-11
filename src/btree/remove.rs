@@ -6,89 +6,80 @@ use crate::btree::node::*;
 use crate::btree::node_cache::*;
 use crate::packed_array::*;
 
+use crate::btree::BTree;
+
 //-------------------------------------------------------------------------
 
-fn remove_internal<
-    V: Serializable,
-    INode: NodeW<NodePtr, ExclusiveProxy>,
-    LNode: NodeW<V, ExclusiveProxy>,
->(
-    cache: &NodeCache,
-    n_ptr: NodePtr,
-    key: u32,
-) -> Result<NodeResult> {
-    let mut node = cache.shadow::<NodePtr, INode>(n_ptr, 0)?;
+impl<
+        V: Serializable + Copy,
+        INodeR: NodeR<NodePtr, SharedProxy>,
+        INodeW: NodeW<NodePtr, ExclusiveProxy>,
+        LNodeR: NodeR<V, SharedProxy>,
+        LNodeW: NodeW<V, ExclusiveProxy>,
+    > BTree<V, INodeR, INodeW, LNodeR, LNodeW>
+{
+    fn remove_internal(&mut self, n_ptr: NodePtr, key: u32) -> Result<NodeResult> {
+        let mut node = self
+            .cache
+            .shadow::<NodePtr, INodeW>(n_ptr, self.snap_time)?;
 
-    let mut idx = node.lower_bound(key);
-    if idx < 0 {
-        return Ok(NodeResult::single(&node));
-    }
+        let mut idx = node.lower_bound(key);
+        if idx < 0 {
+            return Ok(NodeResult::single(&node));
+        }
 
-    if idx as usize == node.nr_entries() {
-        idx -= 1;
-    }
+        if idx as usize == node.nr_entries() {
+            idx -= 1;
+        }
 
-    let idx = idx as usize;
-
-    let child = node.get_value(idx);
-    let res = remove_recurse::<V, INode, LNode>(cache, child, key)?;
-    node_insert_result(cache, &mut node, idx, &res)
-}
-
-fn remove_leaf<V: Serializable, LNode: NodeW<V, ExclusiveProxy>>(
-    cache: &NodeCache,
-    n_ptr: NodePtr,
-    key: u32,
-) -> Result<NodeResult> {
-    let mut node = cache.shadow::<V, LNode>(n_ptr, 0)?;
-
-    let idx = node.lower_bound(key);
-    if (idx >= 0) && ((idx as usize) < node.nr_entries()) {
         let idx = idx as usize;
-        if node.get_key(idx) == key {
-            node.remove_at(idx);
+
+        let child = node.get_value(idx);
+        let res = self.remove_recurse(child, key)?;
+        self.node_insert_result(&mut node, idx, &res)
+    }
+
+    fn remove_leaf(&mut self, n_ptr: NodePtr, key: u32) -> Result<NodeResult> {
+        let mut node = self.cache.shadow::<V, LNodeW>(n_ptr, 0)?;
+
+        let idx = node.lower_bound(key);
+        if (idx >= 0) && ((idx as usize) < node.nr_entries()) {
+            let idx = idx as usize;
+            if node.get_key(idx) == key {
+                node.remove_at(idx);
+            }
+        }
+        Ok(NodeResult::single(&node))
+    }
+
+    fn remove_recurse(&mut self, n_ptr: NodePtr, key: u32) -> Result<NodeResult> {
+        if self.cache.is_internal(n_ptr)? {
+            self.remove_internal(n_ptr, key)
+        } else {
+            self.remove_leaf(n_ptr, key)
         }
     }
-    Ok(NodeResult::single(&node))
-}
 
-fn remove_recurse<
-    V: Serializable,
-    INode: NodeW<NodePtr, ExclusiveProxy>,
-    LNode: NodeW<V, ExclusiveProxy>,
->(
-    cache: &NodeCache,
-    n_ptr: NodePtr,
-    key: u32,
-) -> Result<NodeResult> {
-    if cache.is_internal(n_ptr)? {
-        remove_internal::<V, INode, LNode>(cache, n_ptr, key)
-    } else {
-        remove_leaf::<V, LNode>(cache, n_ptr, key)
-    }
-}
+    pub fn remove_(&mut self, key: u32) -> Result<NodePtr> {
+        use NodeResult::*;
 
-pub fn remove<
-    V: Serializable,
-    INode: NodeW<NodePtr, ExclusiveProxy>,
-    LNode: NodeW<V, ExclusiveProxy>,
->(
-    cache: &NodeCache,
-    root: NodePtr,
-    key: u32,
-) -> Result<NodePtr> {
-    use NodeResult::*;
-
-    match remove_recurse::<V, INode, LNode>(cache, root, key)? {
-        Single(NodeInfo { n_ptr, .. }) => Ok(n_ptr),
-        Pair(left, right) => {
-            let mut parent: INode = cache.new_node(false)?;
-            parent.append(
-                &[left.key_min.unwrap(), right.key_min.unwrap()],
-                &[left.n_ptr, right.n_ptr],
-            );
-            Ok(parent.n_ptr())
+        match self.remove_recurse(self.root, key)? {
+            Single(NodeInfo { n_ptr, .. }) => Ok(n_ptr),
+            Pair(left, right) => {
+                let mut parent: INodeW = self.cache.new_node(false)?;
+                parent.append(
+                    &[left.key_min.unwrap(), right.key_min.unwrap()],
+                    &[left.n_ptr, right.n_ptr],
+                );
+                Ok(parent.n_ptr())
+            }
         }
+    }
+
+    pub fn remove(&mut self, key: u32) -> Result<()> {
+        let root = self.remove_(key)?;
+        self.root = root;
+        Ok(())
     }
 }
 
@@ -125,125 +116,116 @@ fn lt_prog<V: Serializable, N: NodeW<V, ExclusiveProxy>>(node: &N, key: u32) -> 
     }
 }
 
-fn remove_lt_internal<V, INode: NodeW<NodePtr, ExclusiveProxy>, LNode: NodeW<V, ExclusiveProxy>>(
-    cache: &NodeCache,
-    n_ptr: NodePtr,
-    key: u32,
-    split_fn: &ValFn<V>,
-) -> Result<NodeResult>
-where
-    V: Serializable,
+impl<
+        V: Serializable + Copy,
+        INodeR: NodeR<NodePtr, SharedProxy>,
+        INodeW: NodeW<NodePtr, ExclusiveProxy>,
+        LNodeR: NodeR<V, SharedProxy>,
+        LNodeW: NodeW<V, ExclusiveProxy>,
+    > BTree<V, INodeR, INodeW, LNodeR, LNodeW>
 {
-    use NodeOp::*;
+    fn remove_lt_internal(
+        &mut self,
+        n_ptr: NodePtr,
+        key: u32,
+        split_fn: &ValFn<V>,
+    ) -> Result<NodeResult> {
+        use NodeOp::*;
 
-    let mut node = cache.shadow::<NodePtr, INode>(n_ptr, 0)?;
-    let prog = lt_prog(&node, key);
+        let mut node = self
+            .cache
+            .shadow::<NodePtr, INodeW>(n_ptr, self.snap_time)?;
+        let prog = lt_prog(&node, key);
 
-    let mut delta = 0;
-    for op in prog {
-        match op {
-            Recurse(_) => {
-                panic!("unexpected recurse");
-            }
-            TrimLt(idx) => {
-                let idx = idx - delta;
-                let res = remove_lt_recurse::<V, INode, LNode>(
-                    cache,
-                    node.get_value(idx),
-                    key,
-                    split_fn,
-                )?;
+        let mut delta = 0;
+        for op in prog {
+            match op {
+                Recurse(_) => {
+                    panic!("unexpected recurse");
+                }
+                TrimLt(idx) => {
+                    let idx = idx - delta;
+                    let res = self.remove_lt_recurse(node.get_value(idx), key, split_fn)?;
 
-                // remove_lt cannot cause a Pair result, so we don't need to preserve the result
-                node_insert_result(cache, &mut node, idx, &res)?;
+                    // remove_lt cannot cause a Pair result, so we don't need to preserve the result
+                    self.node_insert_result(&mut node, idx, &res)?;
+                }
+                TrimGeq(_) => {
+                    panic!("unexpected trim geq");
+                }
+                Erase(idx_b, idx_e) => {
+                    node.erase(idx_b - delta, idx_e - delta);
+                    delta += idx_e - idx_b;
+                }
             }
-            TrimGeq(_) => {
-                panic!("unexpected trim geq");
+        }
+
+        Ok(NodeResult::single(&node))
+    }
+
+    fn remove_lt_leaf(
+        &mut self,
+        n_ptr: NodePtr,
+        key: u32,
+        split_fn: &ValFn<V>,
+    ) -> Result<NodeResult> {
+        use NodeOp::*;
+
+        let mut node = self.cache.shadow::<V, LNodeW>(n_ptr, self.snap_time)?;
+        let prog = lt_prog(&node, key);
+
+        let mut delta = 0;
+        for op in prog {
+            match op {
+                Recurse(_) => {
+                    panic!("unexpected recurse");
+                }
+                TrimLt(idx) => match split_fn(node.get_key(idx), node.get_value(idx)) {
+                    None => {
+                        node.remove_at(idx);
+                    }
+                    Some((new_key, new_value)) => {
+                        node.overwrite(idx, new_key, &new_value);
+                    }
+                },
+                TrimGeq(_) => {
+                    panic!("unexpected trim geq");
+                }
+                Erase(idx_b, idx_e) => {
+                    node.erase(idx_b - delta, idx_e - delta);
+                    delta += idx_e - idx_b;
+                }
             }
-            Erase(idx_b, idx_e) => {
-                node.erase(idx_b - delta, idx_e - delta);
-                delta += idx_e - idx_b;
-            }
+        }
+
+        Ok(NodeResult::single(&node))
+    }
+
+    pub fn remove_lt_recurse(
+        &mut self,
+        n_ptr: NodePtr,
+        key: u32,
+        split_fn: &ValFn<V>,
+    ) -> Result<NodeResult> {
+        if self.cache.is_internal(n_ptr)? {
+            self.remove_lt_internal(n_ptr, key, split_fn)
+        } else {
+            self.remove_lt_leaf(n_ptr, key, split_fn)
         }
     }
 
-    Ok(NodeResult::single(&node))
-}
-
-fn remove_lt_leaf<V, LNode: NodeW<V, ExclusiveProxy>>(
-    cache: &NodeCache,
-    n_ptr: NodePtr,
-    key: u32,
-    split_fn: &ValFn<V>,
-) -> Result<NodeResult>
-where
-    V: Serializable,
-{
-    use NodeOp::*;
-
-    let mut node = cache.shadow::<V, LNode>(n_ptr, 0)?;
-    let prog = lt_prog(&node, key);
-
-    let mut delta = 0;
-    for op in prog {
-        match op {
-            Recurse(_) => {
-                panic!("unexpected recurse");
-            }
-            TrimLt(idx) => match split_fn(node.get_key(idx), node.get_value(idx)) {
-                None => {
-                    node.remove_at(idx);
-                }
-                Some((new_key, new_value)) => {
-                    node.overwrite(idx, new_key, &new_value);
-                }
-            },
-            TrimGeq(_) => {
-                panic!("unexpected trim geq");
-            }
-            Erase(idx_b, idx_e) => {
-                node.erase(idx_b - delta, idx_e - delta);
-                delta += idx_e - idx_b;
-            }
+    fn remove_lt_(&mut self, root: NodePtr, key: u32, split_fn: &ValFn<V>) -> Result<NodePtr> {
+        match self.remove_lt_recurse(root, key, split_fn)? {
+            NodeResult::Single(NodeInfo { n_ptr, .. }) => Ok(n_ptr),
+            NodeResult::Pair(_, _) => Err(anyhow!("remove_lt increase nr entries somehow")),
         }
     }
 
-    Ok(NodeResult::single(&node))
-}
-
-pub fn remove_lt_recurse<
-    V: Serializable,
-    INode: NodeW<NodePtr, ExclusiveProxy>,
-    LNode: NodeW<V, ExclusiveProxy>,
->(
-    cache: &NodeCache,
-    n_ptr: NodePtr,
-    key: u32,
-    split_fn: &ValFn<V>,
-) -> Result<NodeResult> {
-    if cache.is_internal(n_ptr)? {
-        remove_lt_internal::<V, INode, LNode>(cache, n_ptr, key, split_fn)
-    } else {
-        remove_lt_leaf::<V, LNode>(cache, n_ptr, key, split_fn)
+    pub fn remove_lt(&mut self, key: u32, val_fn: &ValFn<V>) -> Result<()> {
+        self.root = self.remove_lt_(self.root, key, val_fn)?;
+        Ok(())
     }
 }
-
-pub fn remove_lt<
-    V: Serializable,
-    INode: NodeW<NodePtr, ExclusiveProxy>,
-    LNode: NodeW<V, ExclusiveProxy>,
->(
-    cache: &NodeCache,
-    root: NodePtr,
-    key: u32,
-    split_fn: &ValFn<V>,
-) -> Result<NodePtr> {
-    match remove_lt_recurse::<V, INode, LNode>(cache, root, key, split_fn)? {
-        NodeResult::Single(NodeInfo { n_ptr, .. }) => Ok(n_ptr),
-        NodeResult::Pair(_, _) => Err(anyhow!("remove_lt increase nr entries somehow")),
-    }
-}
-
 //-------------------------------------------------------------------------
 
 fn geq_prog<V: Serializable, N: NodeW<V, ExclusiveProxy>>(node: &N, key: u32) -> NodeProgram {
@@ -272,125 +254,116 @@ fn geq_prog<V: Serializable, N: NodeW<V, ExclusiveProxy>>(node: &N, key: u32) ->
     }
 }
 
-fn remove_geq_internal<V, INode: NodeW<NodePtr, ExclusiveProxy>, LNode: NodeW<V, ExclusiveProxy>>(
-    cache: &NodeCache,
-    n_ptr: NodePtr,
-    key: u32,
-    split_fn: &ValFn<V>,
-) -> Result<NodeResult>
-where
-    V: Serializable,
+impl<
+        V: Serializable + Copy,
+        INodeR: NodeR<NodePtr, SharedProxy>,
+        INodeW: NodeW<NodePtr, ExclusiveProxy>,
+        LNodeR: NodeR<V, SharedProxy>,
+        LNodeW: NodeW<V, ExclusiveProxy>,
+    > BTree<V, INodeR, INodeW, LNodeR, LNodeW>
 {
-    use NodeOp::*;
+    fn remove_geq_internal(
+        &mut self,
+        n_ptr: NodePtr,
+        key: u32,
+        split_fn: &ValFn<V>,
+    ) -> Result<NodeResult> {
+        use NodeOp::*;
 
-    let mut node = cache.shadow::<NodePtr, INode>(n_ptr, 0)?;
-    let prog = geq_prog(&node, key);
+        let mut node = self
+            .cache
+            .shadow::<NodePtr, INodeW>(n_ptr, self.snap_time)?;
+        let prog = geq_prog(&node, key);
 
-    let mut delta = 0;
-    for op in prog {
-        match op {
-            Recurse(_) => {
-                panic!("unexpected recurse");
-            }
-            TrimLt(_) => {
-                panic!("unexpected thin lt");
-            }
-            TrimGeq(idx) => {
-                let idx = idx - delta;
-                let res = remove_geq_recurse::<V, INode, LNode>(
-                    cache,
-                    node.get_value(idx),
-                    key,
-                    split_fn,
-                )?;
+        let mut delta = 0;
+        for op in prog {
+            match op {
+                Recurse(_) => {
+                    panic!("unexpected recurse");
+                }
+                TrimLt(_) => {
+                    panic!("unexpected thin lt");
+                }
+                TrimGeq(idx) => {
+                    let idx = idx - delta;
+                    let res = self.remove_geq_recurse(node.get_value(idx), key, split_fn)?;
 
-                // remove_geq cannot cause a Pair result, so this can't split node.
-                node_insert_result(cache, &mut node, idx, &res)?;
+                    // remove_geq cannot cause a Pair result, so this can't split node.
+                    self.node_insert_result(&mut node, idx, &res)?;
+                }
+                Erase(idx_b, idx_e) => {
+                    node.erase(idx_b - delta, idx_e - delta);
+                    delta += idx_e - idx_b;
+                }
             }
-            Erase(idx_b, idx_e) => {
-                node.erase(idx_b - delta, idx_e - delta);
-                delta += idx_e - idx_b;
+        }
+
+        Ok(NodeResult::single(&node))
+    }
+
+    fn remove_geq_leaf(
+        &mut self,
+        n_ptr: NodePtr,
+        key: u32,
+        split_fn: &ValFn<V>,
+    ) -> Result<NodeResult> {
+        use NodeOp::*;
+
+        let mut node = self.cache.shadow::<V, LNodeW>(n_ptr, self.snap_time)?;
+        let prog = geq_prog(&node, key);
+
+        let mut delta = 0;
+        for op in prog {
+            match op {
+                Recurse(_) => {
+                    panic!("unexpected recurse");
+                }
+                TrimLt(_) => {
+                    panic!("unexpected trim lt");
+                }
+                TrimGeq(idx) => match split_fn(node.get_key(idx), node.get_value(idx)) {
+                    None => {
+                        node.remove_at(idx);
+                    }
+                    Some((new_key, new_value)) => {
+                        node.overwrite(idx, new_key, &new_value);
+                    }
+                },
+                Erase(idx_b, idx_e) => {
+                    node.erase(idx_b - delta, idx_e - delta);
+                    delta += idx_e - idx_b;
+                }
             }
+        }
+
+        Ok(NodeResult::single(&node))
+    }
+
+    fn remove_geq_recurse(
+        &mut self,
+        n_ptr: NodePtr,
+        key: u32,
+        split_fn: &ValFn<V>,
+    ) -> Result<NodeResult> {
+        if self.cache.is_internal(n_ptr)? {
+            self.remove_geq_internal(n_ptr, key, split_fn)
+        } else {
+            self.remove_geq_leaf(n_ptr, key, split_fn)
         }
     }
 
-    Ok(NodeResult::single(&node))
-}
-
-fn remove_geq_leaf<V, LNode: NodeW<V, ExclusiveProxy>>(
-    cache: &NodeCache,
-    n_ptr: NodePtr,
-    key: u32,
-    split_fn: &ValFn<V>,
-) -> Result<NodeResult>
-where
-    V: Serializable,
-{
-    use NodeOp::*;
-
-    let mut node = cache.shadow::<V, LNode>(n_ptr, 0)?;
-    let prog = geq_prog(&node, key);
-
-    let mut delta = 0;
-    for op in prog {
-        match op {
-            Recurse(_) => {
-                panic!("unexpected recurse");
-            }
-            TrimLt(_) => {
-                panic!("unexpected trim lt");
-            }
-            TrimGeq(idx) => match split_fn(node.get_key(idx), node.get_value(idx)) {
-                None => {
-                    node.remove_at(idx);
-                }
-                Some((new_key, new_value)) => {
-                    node.overwrite(idx, new_key, &new_value);
-                }
-            },
-            Erase(idx_b, idx_e) => {
-                node.erase(idx_b - delta, idx_e - delta);
-                delta += idx_e - idx_b;
-            }
+    fn remove_geq_(&mut self, root: NodePtr, key: u32, split_fn: &ValFn<V>) -> Result<NodePtr> {
+        match self.remove_geq_recurse(root, key, split_fn)? {
+            NodeResult::Single(NodeInfo { n_ptr, .. }) => Ok(n_ptr),
+            NodeResult::Pair(_, _) => Err(anyhow!("remove_geq increased nr of entries")),
         }
     }
 
-    Ok(NodeResult::single(&node))
-}
-
-fn remove_geq_recurse<
-    V: Serializable,
-    INode: NodeW<NodePtr, ExclusiveProxy>,
-    LNode: NodeW<V, ExclusiveProxy>,
->(
-    cache: &NodeCache,
-    n_ptr: NodePtr,
-    key: u32,
-    split_fn: &ValFn<V>,
-) -> Result<NodeResult> {
-    if cache.is_internal(n_ptr)? {
-        remove_geq_internal::<V, INode, LNode>(cache, n_ptr, key, split_fn)
-    } else {
-        remove_geq_leaf::<V, LNode>(cache, n_ptr, key, split_fn)
+    pub fn remove_geq(&mut self, key: u32, val_fn: &ValFn<V>) -> Result<()> {
+        self.root = self.remove_geq_(self.root, key, val_fn)?;
+        Ok(())
     }
 }
-
-pub fn remove_geq<
-    V: Serializable,
-    INode: NodeW<NodePtr, ExclusiveProxy>,
-    LNode: NodeW<V, ExclusiveProxy>,
->(
-    cache: &NodeCache,
-    root: NodePtr,
-    key: u32,
-    split_fn: &ValFn<V>,
-) -> Result<NodePtr> {
-    match remove_geq_recurse::<V, INode, LNode>(cache, root, key, split_fn)? {
-        NodeResult::Single(NodeInfo { n_ptr, .. }) => Ok(n_ptr),
-        NodeResult::Pair(_, _) => Err(anyhow!("remove_geq increased nr of entries")),
-    }
-}
-
 //-------------------------------------------------------------------------
 
 // Categorises where a given key is to be found.  usizes are indexes into the
@@ -476,199 +449,194 @@ fn range_split<V: Serializable, N: NodeW<V, ExclusiveProxy>>(
     }
 }
 
-fn remove_range_internal<
-    V,
-    INode: NodeW<NodePtr, ExclusiveProxy>,
-    LNode: NodeW<V, ExclusiveProxy>,
->(
-    cache: &NodeCache,
-    n_ptr: NodePtr,
-    key_begin: u32,
-    key_end: u32,
-    split_lt: &ValFn<V>,
-    split_geq: &ValFn<V>,
-) -> Result<NodeResult>
-where
-    V: Serializable + Copy,
+impl<
+        V: Serializable + Copy,
+        INodeR: NodeR<NodePtr, SharedProxy>,
+        INodeW: NodeW<NodePtr, ExclusiveProxy>,
+        LNodeR: NodeR<V, SharedProxy>,
+        LNodeW: NodeW<V, ExclusiveProxy>,
+    > BTree<V, INodeR, INodeW, LNodeR, LNodeW>
 {
-    use NodeOp::*;
+    fn remove_range_internal(
+        &mut self,
+        n_ptr: NodePtr,
+        key_begin: u32,
+        key_end: u32,
+        split_lt: &ValFn<V>,
+        split_geq: &ValFn<V>,
+    ) -> Result<NodeResult> {
+        use NodeOp::*;
 
-    let mut node = cache.shadow::<NodePtr, INode>(n_ptr, 0)?;
-    let prog = range_split(&node, key_begin, key_end);
-    let prog_len = prog.len();
+        let mut node = self
+            .cache
+            .shadow::<NodePtr, INodeW>(n_ptr, self.snap_time)?;
+        let prog = range_split(&node, key_begin, key_end);
+        let prog_len = prog.len();
 
-    let mut delta = 0;
-    for op in prog {
-        match op {
-            Recurse(idx) => {
-                assert!(prog_len == 1);
-                return remove_range_recurse::<V, INode, LNode>(
-                    cache,
-                    node.get_value(idx),
-                    key_begin,
-                    key_end,
-                    split_lt,
-                    split_geq,
+        let mut delta = 0;
+        for op in prog {
+            match op {
+                Recurse(idx) => {
+                    assert!(prog_len == 1);
+                    return self.remove_range_recurse(
+                        node.get_value(idx),
+                        key_begin,
+                        key_end,
+                        split_lt,
+                        split_geq,
+                    );
+                }
+
+                // The rest of the ops are guaranteed to return a Single, so we don't need
+                // to do anything fancy aggregating them.
+                TrimLt(idx) => {
+                    let idx = idx - delta;
+
+                    let res = self.remove_lt_recurse(node.get_value(idx), key_end, split_lt)?;
+                    self.node_insert_result(&mut node, idx, &res)?;
+                }
+                TrimGeq(idx) => {
+                    let idx = idx - delta;
+                    let res = self.remove_geq_recurse(node.get_value(idx), key_begin, split_geq)?;
+                    self.node_insert_result(&mut node, idx, &res)?;
+                }
+                Erase(idx_b, idx_e) => {
+                    node.erase(idx_b - delta, idx_e - delta);
+                    delta += idx_e - idx_b;
+                }
+            }
+        }
+        Ok(NodeResult::single(&node))
+    }
+
+    fn remove_range_leaf(
+        &mut self,
+        n_ptr: NodePtr,
+        key_begin: u32,
+        key_end: u32,
+        split_lt: &ValFn<V>,
+        split_geq: &ValFn<V>,
+    ) -> Result<NodeResult> {
+        use NodeOp::*;
+
+        let mut node = self.cache.shadow::<V, LNodeW>(n_ptr, self.snap_time)?;
+        let prog = range_split(&node, key_begin, key_end);
+        let prog_len = prog.len();
+
+        let mut delta = 0;
+        for op in prog {
+            match op {
+                Recurse(idx) => {
+                    assert!(prog_len == 1);
+
+                    // This means the range hits the middle of an entry.
+                    // So we'll have to split it in two.
+                    let k = node.get_key(idx);
+                    let v = node.get_value(idx);
+                    match (split_geq(k, v), split_lt(k, v)) {
+                        (None, None) => {
+                            node.remove_at(idx);
+                            return Ok(NodeResult::single(&node));
+                        }
+                        (Some((k, v)), None) => {
+                            node.overwrite(idx, k, &v);
+                            return Ok(NodeResult::single(&node));
+                        }
+                        (None, Some((k, v))) => {
+                            node.overwrite(idx, k, &v);
+                            return Ok(NodeResult::single(&node));
+                        }
+                        (Some((k1, v1)), Some((k2, v2))) => {
+                            eprintln!("k1 = {:?}, k2 = {:?}", k1, k2);
+                            node.overwrite(idx, k1, &v1);
+                            return ensure_space(
+                                self.cache.as_ref(),
+                                &mut node,
+                                idx,
+                                |node, idx| node.insert(idx + 1, k2, &v2),
+                            );
+                        }
+                    }
+                }
+                TrimLt(idx) => {
+                    let idx = idx - delta;
+                    match split_lt(node.get_key(idx), node.get_value(idx)) {
+                        None => {
+                            node.remove_at(idx);
+                        }
+                        Some((new_key, v)) => {
+                            node.overwrite(idx, new_key, &v);
+                        }
+                    }
+                }
+                TrimGeq(idx) => {
+                    let idx = idx - delta;
+                    match split_geq(node.get_key(idx), node.get_value(idx)) {
+                        None => {
+                            node.remove_at(idx);
+                        }
+                        Some((new_key, v)) => {
+                            node.overwrite(idx, new_key, &v);
+                        }
+                    }
+                }
+                Erase(idx_b, idx_e) => {
+                    node.erase(idx_b - delta, idx_e - delta);
+                    delta += idx_e - idx_b;
+                }
+            }
+        }
+
+        Ok(NodeResult::single(&node))
+    }
+
+    fn remove_range_recurse(
+        &mut self,
+        n_ptr: NodePtr,
+        key_begin: u32,
+        key_end: u32,
+        split_lt: &ValFn<V>,
+        split_geq: &ValFn<V>,
+    ) -> Result<NodeResult> {
+        if self.cache.is_internal(n_ptr)? {
+            self.remove_range_internal(n_ptr, key_begin, key_end, split_lt, split_geq)
+        } else {
+            self.remove_range_leaf(n_ptr, key_begin, key_end, split_lt, split_geq)
+        }
+    }
+
+    pub fn remove_range_(
+        &mut self,
+        root: NodePtr,
+        key_begin: u32,
+        key_end: u32,
+        split_lt: &ValFn<V>,
+        split_geq: &ValFn<V>,
+    ) -> Result<NodePtr> {
+        use NodeResult::*;
+
+        match self.remove_range_recurse(root, key_begin, key_end, split_lt, split_geq)? {
+            Single(NodeInfo { n_ptr, .. }) => Ok(n_ptr),
+            Pair(left, right) => {
+                let mut parent: INodeW = self.cache.new_node(false)?;
+                parent.append(
+                    &[left.key_min.unwrap(), right.key_min.unwrap()],
+                    &[left.n_ptr, right.n_ptr],
                 );
-            }
-
-            // The rest of the ops are guaranteed to return a Single, so we don't need
-            // to do anything fancy aggregating them.
-            TrimLt(idx) => {
-                let idx = idx - delta;
-
-                let res = remove_lt_recurse::<V, INode, LNode>(
-                    cache,
-                    node.get_value(idx),
-                    key_end,
-                    split_lt,
-                )?;
-                node_insert_result(cache, &mut node, idx, &res)?;
-            }
-            TrimGeq(idx) => {
-                let idx = idx - delta;
-                let res = remove_geq_recurse::<V, INode, LNode>(
-                    cache,
-                    node.get_value(idx),
-                    key_begin,
-                    split_geq,
-                )?;
-                node_insert_result(cache, &mut node, idx, &res)?;
-            }
-            Erase(idx_b, idx_e) => {
-                node.erase(idx_b - delta, idx_e - delta);
-                delta += idx_e - idx_b;
-            }
-        }
-    }
-    Ok(NodeResult::single(&node))
-}
-
-fn remove_range_leaf<V: Serializable + Copy, LNode: NodeW<V, ExclusiveProxy>>(
-    cache: &NodeCache,
-    n_ptr: NodePtr,
-    key_begin: u32,
-    key_end: u32,
-    split_lt: &ValFn<V>,
-    split_geq: &ValFn<V>,
-) -> Result<NodeResult> {
-    use NodeOp::*;
-
-    let mut node = cache.shadow::<V, LNode>(n_ptr, 0)?;
-    let prog = range_split(&node, key_begin, key_end);
-    let prog_len = prog.len();
-
-    let mut delta = 0;
-    for op in prog {
-        match op {
-            Recurse(idx) => {
-                assert!(prog_len == 1);
-
-                // This means the range hits the middle of an entry.
-                // So we'll have to split it in two.
-                let k = node.get_key(idx);
-                let v = node.get_value(idx);
-                match (split_geq(k, v), split_lt(k, v)) {
-                    (None, None) => {
-                        node.remove_at(idx);
-                        return Ok(NodeResult::single(&node));
-                    }
-                    (Some((k, v)), None) => {
-                        node.overwrite(idx, k, &v);
-                        return Ok(NodeResult::single(&node));
-                    }
-                    (None, Some((k, v))) => {
-                        node.overwrite(idx, k, &v);
-                        return Ok(NodeResult::single(&node));
-                    }
-                    (Some((k1, v1)), Some((k2, v2))) => {
-                        eprintln!("k1 = {:?}, k2 = {:?}", k1, k2);
-                        node.overwrite(idx, k1, &v1);
-                        return ensure_space(cache, &mut node, idx, |node, idx| {
-                            node.insert(idx + 1, k2, &v2)
-                        });
-                    }
-                }
-            }
-            TrimLt(idx) => {
-                let idx = idx - delta;
-                match split_lt(node.get_key(idx), node.get_value(idx)) {
-                    None => {
-                        node.remove_at(idx);
-                    }
-                    Some((new_key, v)) => {
-                        node.overwrite(idx, new_key, &v);
-                    }
-                }
-            }
-            TrimGeq(idx) => {
-                let idx = idx - delta;
-                match split_geq(node.get_key(idx), node.get_value(idx)) {
-                    None => {
-                        node.remove_at(idx);
-                    }
-                    Some((new_key, v)) => {
-                        node.overwrite(idx, new_key, &v);
-                    }
-                }
-            }
-            Erase(idx_b, idx_e) => {
-                node.erase(idx_b - delta, idx_e - delta);
-                delta += idx_e - idx_b;
+                Ok(parent.n_ptr())
             }
         }
     }
 
-    Ok(NodeResult::single(&node))
-}
-
-fn remove_range_recurse<
-    V: Serializable + Copy,
-    INode: NodeW<NodePtr, ExclusiveProxy>,
-    LNode: NodeW<V, ExclusiveProxy>,
->(
-    cache: &NodeCache,
-    n_ptr: NodePtr,
-    key_begin: u32,
-    key_end: u32,
-    split_lt: &ValFn<V>,
-    split_geq: &ValFn<V>,
-) -> Result<NodeResult> {
-    if cache.is_internal(n_ptr)? {
-        remove_range_internal::<V, INode, LNode>(
-            cache, n_ptr, key_begin, key_end, split_lt, split_geq,
-        )
-    } else {
-        remove_range_leaf::<V, LNode>(cache, n_ptr, key_begin, key_end, split_lt, split_geq)
-    }
-}
-
-pub fn remove_range<
-    V: Serializable + Copy,
-    INode: NodeW<NodePtr, ExclusiveProxy>,
-    LNode: NodeW<V, ExclusiveProxy>,
->(
-    cache: &NodeCache,
-    root: NodePtr,
-    key_begin: u32,
-    key_end: u32,
-    split_lt: &ValFn<V>,
-    split_geq: &ValFn<V>,
-) -> Result<NodePtr> {
-    use NodeResult::*;
-
-    match remove_range_recurse::<V, INode, LNode>(
-        cache, root, key_begin, key_end, split_lt, split_geq,
-    )? {
-        Single(NodeInfo { n_ptr, .. }) => Ok(n_ptr),
-        Pair(left, right) => {
-            let mut parent: INode = cache.new_node(false)?;
-            parent.append(
-                &[left.key_min.unwrap(), right.key_min.unwrap()],
-                &[left.n_ptr, right.n_ptr],
-            );
-            Ok(parent.n_ptr())
-        }
+    pub fn remove_range(
+        &mut self,
+        key_begin: u32,
+        key_end: u32,
+        val_lt: &ValFn<V>,
+        val_geq: &ValFn<V>,
+    ) -> Result<()> {
+        self.root = self.remove_range_(self.root, key_begin, key_end, val_lt, val_geq)?;
+        Ok(())
     }
 }
 

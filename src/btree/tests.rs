@@ -1,26 +1,23 @@
-use anyhow::{ensure, Result};
-use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
-use rand::seq::SliceRandom;
-use rand::Rng;
-use std::collections::BTreeSet;
-use std::io::{self, Read, Write};
-use std::sync::Arc;
-use thinp::io_engine::*;
-
-use crate::block_cache::*;
-use crate::btree::node::*;
-use crate::btree::node_cache::*;
-use crate::btree::simple_node::*;
-use crate::btree::BTree;
-use crate::buddy_alloc::*;
-use crate::core::*;
-use crate::packed_array::*;
-
 //-------------------------------------------------------------------------
 
 #[cfg(test)]
 mod test {
-    use super::*;
+    use anyhow::{ensure, Result};
+    use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+    use rand::seq::SliceRandom;
+    use rand::Rng;
+    use std::io::{self, Read, Write};
+    use std::sync::Arc;
+    use thinp::io_engine::*;
+
+    use crate::block_cache::*;
+    use crate::btree::node::*;
+    use crate::btree::node_cache::*;
+    use crate::btree::simple_node::*;
+    use crate::btree::BTree;
+    use crate::buddy_alloc::*;
+    use crate::core::*;
+    use crate::packed_array::*;
 
     fn mk_engine(nr_blocks: u32) -> Arc<dyn IoEngine> {
         Arc::new(CoreIoEngine::new(nr_blocks as u64))
@@ -64,6 +61,7 @@ mod test {
         engine: Arc<dyn IoEngine>,
         cache: Arc<NodeCache>,
         tree: TestTree,
+        snap_time: u32,
     }
 
     impl Fixture {
@@ -82,17 +80,19 @@ mod test {
                 engine,
                 cache: node_cache,
                 tree,
+                snap_time: 0,
             })
         }
 
-        // Disabling until btree snaps are working again
-        // fn clone(&self) -> Self {
-        //     Self {
-        //         engine: self.engine.clone(),
-        //         cache: self.cache.clone(),
-        //         tree: self.tree.snap(),
-        //     }
-        // }
+        fn snap(&mut self) -> Self {
+            self.snap_time += 1;
+            Self {
+                engine: self.engine.clone(),
+                cache: self.cache.clone(),
+                tree: self.tree.snap(self.snap_time),
+                snap_time: self.snap_time,
+            }
+        }
 
         fn check(&self) -> Result<u32> {
             self.tree.check()
@@ -111,7 +111,7 @@ mod test {
         }
 
         fn commit(&mut self) -> Result<()> {
-            let roots = vec![self.tree.root().loc];
+            // let roots = vec![self.tree.root().loc];
 
             // FIXME: finish
             Ok(())

@@ -79,6 +79,7 @@ impl IoEngine for CoreIoEngine {
 
     fn write(&self, block: &Block) -> io::Result<()> {
         if block.loc >= self.nr_blocks {
+            panic!("IoEngine size and BlockCache size don't match");
             return Err(io::Error::from(io::ErrorKind::InvalidInput));
         }
         unsafe {

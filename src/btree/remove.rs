@@ -17,7 +17,7 @@ fn remove_internal<
     n_ptr: NodePtr,
     key: u32,
 ) -> Result<NodeResult> {
-    let mut node = cache.shadow::<NodePtr, INode>(n_ptr)?;
+    let mut node = cache.shadow::<NodePtr, INode>(n_ptr, 0)?;
 
     let mut idx = node.lower_bound(key);
     if idx < 0 {
@@ -40,7 +40,7 @@ fn remove_leaf<V: Serializable, LNode: NodeW<V, ExclusiveProxy>>(
     n_ptr: NodePtr,
     key: u32,
 ) -> Result<NodeResult> {
-    let mut node = cache.shadow::<V, LNode>(n_ptr)?;
+    let mut node = cache.shadow::<V, LNode>(n_ptr, 0)?;
 
     let idx = node.lower_bound(key);
     if (idx >= 0) && ((idx as usize) < node.nr_entries()) {
@@ -136,7 +136,7 @@ where
 {
     use NodeOp::*;
 
-    let mut node = cache.shadow::<NodePtr, INode>(n_ptr)?;
+    let mut node = cache.shadow::<NodePtr, INode>(n_ptr, 0)?;
     let prog = lt_prog(&node, key);
 
     let mut delta = 0;
@@ -181,7 +181,7 @@ where
 {
     use NodeOp::*;
 
-    let mut node = cache.shadow::<V, LNode>(n_ptr)?;
+    let mut node = cache.shadow::<V, LNode>(n_ptr, 0)?;
     let prog = lt_prog(&node, key);
 
     let mut delta = 0;
@@ -283,7 +283,7 @@ where
 {
     use NodeOp::*;
 
-    let mut node = cache.shadow::<NodePtr, INode>(n_ptr)?;
+    let mut node = cache.shadow::<NodePtr, INode>(n_ptr, 0)?;
     let prog = geq_prog(&node, key);
 
     let mut delta = 0;
@@ -328,7 +328,7 @@ where
 {
     use NodeOp::*;
 
-    let mut node = cache.shadow::<V, LNode>(n_ptr)?;
+    let mut node = cache.shadow::<V, LNode>(n_ptr, 0)?;
     let prog = geq_prog(&node, key);
 
     let mut delta = 0;
@@ -493,7 +493,7 @@ where
 {
     use NodeOp::*;
 
-    let mut node = cache.shadow::<NodePtr, INode>(n_ptr)?;
+    let mut node = cache.shadow::<NodePtr, INode>(n_ptr, 0)?;
     let prog = range_split(&node, key_begin, key_end);
     let prog_len = prog.len();
 
@@ -554,7 +554,7 @@ fn remove_range_leaf<V: Serializable + Copy, LNode: NodeW<V, ExclusiveProxy>>(
 ) -> Result<NodeResult> {
     use NodeOp::*;
 
-    let mut node = cache.shadow::<V, LNode>(n_ptr)?;
+    let mut node = cache.shadow::<V, LNode>(n_ptr, 0)?;
     let prog = range_split(&node, key_begin, key_end);
     let prog_len = prog.len();
 

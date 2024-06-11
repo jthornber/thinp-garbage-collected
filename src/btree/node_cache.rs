@@ -13,18 +13,11 @@ use crate::packed_array::*;
 pub struct NodeCacheInner {
     alloc: BuddyAllocator,
     cache: Arc<BlockCache>,
-    snap_time: u32,
 }
 
 impl NodeCacheInner {
-    pub fn new(cache: Arc<BlockCache>) -> Self {
-        // FIXME: hard coded metadata size
-        let alloc = BuddyAllocator::new(12); // 16m of metadata
-        Self {
-            alloc,
-            cache,
-            snap_time: 0,
-        }
+    pub fn new(cache: Arc<BlockCache>, alloc: BuddyAllocator) -> Self {
+        Self { alloc, cache }
     }
 
     pub fn is_internal(&mut self, n_ptr: NodePtr) -> Result<bool> {
@@ -51,6 +44,7 @@ impl NodeCacheInner {
             Node::open(loc as u32, new)
         } else {
             // FIXME: resize the node file
+            panic!("out of nodes");
             Err(anyhow!("couldn't allocate new block"))
         }
     }
@@ -58,11 +52,12 @@ impl NodeCacheInner {
     pub fn shadow<V: Serializable, Node: NodeW<V, ExclusiveProxy>>(
         &mut self,
         n_ptr: NodePtr,
+        snap_time: u32,
     ) -> Result<Node> {
         let old = self.cache.exclusive_lock(n_ptr.loc)?;
         let hdr = read_node_header(&mut old.r())?;
 
-        if self.snap_time > hdr.snap_time {
+        if snap_time > hdr.snap_time {
             // copy needed
             if let Some(loc) = self.alloc.alloc(1) {
                 let mut new = self.cache.zero_lock(loc as u32)?;
@@ -84,8 +79,8 @@ pub struct NodeCache {
 }
 
 impl NodeCache {
-    pub fn new(cache: Arc<BlockCache>) -> Self {
-        let inner = Arc::new(Mutex::new(NodeCacheInner::new(cache)));
+    pub fn new(cache: Arc<BlockCache>, alloc: BuddyAllocator) -> Self {
+        let inner = Arc::new(Mutex::new(NodeCacheInner::new(cache, alloc)));
         Self { inner }
     }
 
@@ -113,9 +108,10 @@ impl NodeCache {
     pub fn shadow<V: Serializable, Node: NodeW<V, ExclusiveProxy>>(
         &self,
         n_ptr: NodePtr,
+        snap_time: u32,
     ) -> Result<Node> {
         let mut inner = self.inner.lock().unwrap();
-        inner.shadow(n_ptr)
+        inner.shadow(n_ptr, snap_time)
     }
 }
 

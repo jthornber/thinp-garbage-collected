@@ -53,7 +53,6 @@ pub fn write_node_header<W: Write>(w: &mut W, hdr: &NodeHeader) -> Result<()> {
 }
 
 pub fn read_node_header<R: Read>(r: &mut R) -> Result<NodeHeader> {
-    let kind = r.read_u32::<LittleEndian>()?;
     let seq_nr = r.read_u32::<LittleEndian>()?;
     let snap_time = r.read_u32::<LittleEndian>()?;
     let flags = BTreeFlags::from(r.read_u16::<LittleEndian>()?);

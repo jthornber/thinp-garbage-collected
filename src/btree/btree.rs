@@ -247,13 +247,14 @@ pub fn btree_refs(r_proxy: &SharedProxy, queue: &mut VecDeque<BlockRef>) {
 mod test {
     use super::*;
     use crate::btree::simple_node::*;
+    use crate::buddy_alloc::*;
     use crate::core::*;
     use anyhow::{ensure, Result};
     use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
     use rand::seq::SliceRandom;
     use rand::Rng;
     use std::io::{self, Read, Write};
-    use std::sync::{Arc, Mutex};
+    use std::sync::Arc;
     use test_log::test;
     use thinp::io_engine::*;
 
@@ -303,9 +304,14 @@ mod test {
 
     impl Fixture {
         fn new(nr_metadata_blocks: u32, nr_data_blocks: u64) -> Result<Self> {
+            // We only cope with powers of two atm.
+            assert!(nr_metadata_blocks.count_ones() == 1);
+
             let engine = mk_engine(nr_metadata_blocks);
             let block_cache = Arc::new(BlockCache::new(engine.clone(), 16)?);
-            let node_cache = Arc::new(NodeCache::new(block_cache));
+            let order = nr_metadata_blocks.trailing_zeros();
+            let alloc = BuddyAllocator::new(order as usize);
+            let node_cache = Arc::new(NodeCache::new(block_cache, alloc));
             let tree = BTree::empty_tree(node_cache.clone())?;
 
             Ok(Self {

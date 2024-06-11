@@ -10,6 +10,7 @@ pub struct BTree<V: Serializable + Copy, INodeR, INodeW, LNodeR, LNodeW> {
     cache: Arc<NodeCache>,
     root: NodePtr,
     snap_time: u32,
+
     phantom_v: std::marker::PhantomData<V>,
     phantom_inode_r: std::marker::PhantomData<INodeR>,
     phantom_inode_w: std::marker::PhantomData<INodeW>,
@@ -17,8 +18,8 @@ pub struct BTree<V: Serializable + Copy, INodeR, INodeW, LNodeR, LNodeW> {
     phantom_lnode_w: std::marker::PhantomData<LNodeW>,
 }
 
-mod btree;
 mod check;
+mod core;
 mod insert;
 mod lookup;
 pub mod node;

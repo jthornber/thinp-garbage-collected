@@ -345,6 +345,8 @@ pub struct Journal {
     seqs: BTreeMap<MetadataBlock, SequenceNr>,
 }
 
+type NotifyFn = Box<dyn FnOnce()>;
+
 impl Journal {
     pub fn create<P: AsRef<Path>>(path: P) -> Result<Self> {
         let slab = SlabFileBuilder::create(path)
@@ -387,6 +389,14 @@ impl Journal {
         Ok(())
     }
 
+    /// The callback will be made once all ops prior to this call have been
+    /// persisted to disk.  Used to ensure the journal is written before
+    /// btree nodes.
+    pub fn add_barrier(&mut self, callback: NotifyFn) -> Result<()> {
+        todo!()
+    }
+
+    // FIXME: I'm not sure we need this.  The barriers should be encouragement enough.
     pub fn sync(&mut self) -> Result<()> {
         let mut w: Vec<u8> = Vec::new();
 

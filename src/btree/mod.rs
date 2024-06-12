@@ -53,7 +53,7 @@ mod core;
 mod insert;
 mod lookup;
 mod node;
-mod node_cache;
+pub mod node_cache;
 mod remove;
 mod simple_node;
 mod tests;

@@ -510,33 +510,6 @@ impl BlockCache {
         }
     }
 
-    pub fn gc_lock(self: Arc<Self>, loc: u32) -> Result<SharedProxy> {
-        use LockResult::*;
-
-        let mut inner = self.inner.lock().unwrap();
-
-        match inner.gc_lock(loc)? {
-            Locked(entry) => {
-                let proxy_ = SharedProxy_ {
-                    loc,
-                    cache: self.clone(),
-                    entry: entry.clone(),
-                };
-
-                let proxy = SharedProxy {
-                    proxy: Arc::new(proxy_),
-                    begin: 0,
-                    end: BLOCK_SIZE,
-                };
-
-                Ok(proxy)
-            }
-            Busy(_) => {
-                panic!("gc_lock blocked!");
-            }
-        }
-    }
-
     pub fn exclusive_lock(self: &Arc<Self>, loc: u32) -> Result<ExclusiveProxy> {
         use LockResult::*;
 

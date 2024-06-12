@@ -3,9 +3,9 @@
 // FIXME: remove the above
 
 // FIXME: not all of these need to be public
+mod allocators;
 mod block_cache;
 mod btree;
-mod buddy_alloc;
 mod byte_types;
 mod core;
 mod hash;

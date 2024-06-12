@@ -4,8 +4,8 @@ use std::fs::{self, OpenOptions};
 use std::path::Path;
 use std::sync::Arc;
 
+use crate::allocators::*;
 use crate::block_cache::*;
-use crate::buddy_alloc::*;
 use crate::journal::*;
 use crate::types::*;
 

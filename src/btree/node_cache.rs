@@ -1,9 +1,9 @@
 use anyhow::Result;
 use std::sync::{Arc, Mutex};
 
+use crate::allocators::*;
 use crate::block_cache::*;
 use crate::btree::node::*;
-use crate::buddy_alloc::*;
 use crate::byte_types::*;
 use crate::packed_array::*;
 

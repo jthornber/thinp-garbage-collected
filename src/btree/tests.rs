@@ -10,12 +10,12 @@ mod test {
     use std::sync::Arc;
     use thinp::io_engine::*;
 
+    use crate::allocators::*;
     use crate::block_cache::*;
     use crate::btree::node::*;
     use crate::btree::node_cache::*;
     use crate::btree::simple_node::*;
     use crate::btree::BTree;
-    use crate::buddy_alloc::*;
     use crate::core::*;
     use crate::packed_array::*;
 

@@ -880,6 +880,7 @@ dependencies = [
  "safemem",
  "test-log",
  "thinp",
+ "thiserror",
  "threadpool",
  "tracing",
  "tracing-subscriber",

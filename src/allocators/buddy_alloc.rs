@@ -1,5 +1,6 @@
 use std::collections::{BTreeMap, BTreeSet};
 
+use crate::allocators::bits::*;
 use crate::allocators::*;
 
 //-------------------------------------
@@ -20,7 +21,7 @@ fn get_buddy(index: u64, order: usize) -> u64 {
 
 impl BuddyAllocator {
     pub fn new_empty(nr_blocks: u64) -> Self {
-        let order = Self::calc_order(nr_blocks);
+        let order = calc_order(nr_blocks);
 
         let mut free_blocks = Vec::new();
         for _ in 0..=order {
@@ -57,48 +58,12 @@ impl BuddyAllocator {
     }
 
     // FIXME: the next three functions can be implemented with bit banging.  See Hacker's Delight.
-    // Helper function to calculate the order based on the number of blocks
-    fn calc_order(nr_blocks: u64) -> usize {
-        let mut order = 0;
-        let mut size = 1;
-        while size < nr_blocks {
-            size <<= 1;
-            order += 1;
-        }
-        order
-    }
-
-    fn calc_order_below(nr_blocks: u64) -> usize {
-        let order = Self::calc_order(nr_blocks);
-        if 1 << order > nr_blocks {
-            order - 1
-        } else {
-            order
-        }
-    }
-
-    /// Calculates the order of the lowest set bit in a given 64-bit unsigned integer.
-    /// If the 2^order will not exceed nr_blocks.
-    fn calc_min_order(n: u64, nr_blocks: u64) -> usize {
-        let mut max_order = n.trailing_zeros();
-        let mut size = 1;
-
-        for order in 0..max_order {
-            if size * 2 > nr_blocks {
-                return order as usize;
-            }
-
-            size <<= 1;
-        }
-
-        max_order as usize
-    }
 
     /// Succeeds if _any_ blocks were pre-allocated.
     pub fn alloc_many(&mut self, nr_blocks: u64, min_order: usize) -> Result<(u64, Vec<AllocRun>)> {
         let mut total_allocated = 0;
         let mut runs = Vec::new();
-        let mut order = Self::calc_order(nr_blocks);
+        let mut order = calc_order(nr_blocks);
 
         let mut remaining = nr_blocks;
         while remaining > 0 {
@@ -133,7 +98,7 @@ impl BuddyAllocator {
             return Err(MemErr::BadParams("cannot allocate zero blocks".to_string()));
         }
 
-        let order = Self::calc_order(nr_blocks);
+        let order = calc_order(nr_blocks);
         let index = self.alloc_order(order)?;
 
         // If the allocated block is larger than needed, free the unused tail
@@ -184,7 +149,7 @@ impl BuddyAllocator {
         let e = b + nr_blocks;
 
         while b != e {
-            let order = Self::calc_min_order(b, e - b);
+            let order = calc_min_order(b, e - b);
             eprintln!("b = {}, order = {}", b, order);
             self.free_order(b, order);
             b += 1 << order;
@@ -224,7 +189,7 @@ impl BuddyAllocator {
         }
 
         let new_total_blocks = self.total_blocks + nr_extra_blocks;
-        let order = Self::calc_order(new_total_blocks);
+        let order = calc_order(new_total_blocks);
 
         // Ensure the free_blocks vector is large enough
         while self.free_blocks.len() <= order {

@@ -1,3 +1,4 @@
+mod bits;
 mod buddy_alloc;
 pub mod data_alloc;
 pub mod metadata_alloc;

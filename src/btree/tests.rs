@@ -7,7 +7,8 @@ mod test {
     use rand::seq::SliceRandom;
     use rand::Rng;
     use std::io::{self, Read, Write};
-    use std::sync::Arc;
+    use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
     use thinp::io_engine::*;
 
     use crate::allocators::*;
@@ -17,6 +18,7 @@ mod test {
     use crate::btree::simple_node::*;
     use crate::btree::BTree;
     use crate::core::*;
+    use crate::journal::*;
     use crate::packed_array::*;
 
     fn mk_engine(nr_blocks: u32) -> Arc<dyn IoEngine> {
@@ -72,7 +74,9 @@ mod test {
             let engine = mk_engine(nr_metadata_blocks);
             let block_cache = Arc::new(BlockCache::new(engine.clone(), 16)?);
             let alloc = BuddyAllocator::new(nr_metadata_blocks as u64);
-            let node_cache = Arc::new(NodeCache::new(block_cache, alloc));
+            let journal_path = PathBuf::from("./journal.log");
+            let journal = Arc::new(Mutex::new(Journal::create(&journal_path)?));
+            let node_cache = Arc::new(NodeCache::new(block_cache, alloc, journal));
             let tree = BTree::empty_tree(node_cache.clone())?;
 
             Ok(Self {

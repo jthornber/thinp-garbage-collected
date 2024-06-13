@@ -4,7 +4,9 @@ use std::sync::{Arc, Mutex};
 use crate::allocators::*;
 use crate::block_cache::*;
 use crate::btree::node::*;
+use crate::btree::node_journal::*;
 use crate::byte_types::*;
+use crate::journal::*;
 use crate::packed_array::*;
 
 //-------------------------------------------------------------------------
@@ -13,11 +15,20 @@ use crate::packed_array::*;
 pub struct NodeCacheInner {
     alloc: BuddyAllocator,
     cache: Arc<BlockCache>,
+    journal: Arc<Mutex<Journal>>,
 }
 
 impl NodeCacheInner {
-    pub fn new(cache: Arc<BlockCache>, alloc: BuddyAllocator) -> Self {
-        Self { alloc, cache }
+    pub fn new(
+        cache: Arc<BlockCache>,
+        alloc: BuddyAllocator,
+        journal: Arc<Mutex<Journal>>,
+    ) -> Self {
+        Self {
+            alloc,
+            cache,
+            journal,
+        }
     }
 
     pub fn is_internal(&mut self, n_ptr: NodePtr) -> Result<bool> {
@@ -34,14 +45,23 @@ impl NodeCacheInner {
         Node::open(n_ptr.loc, b)
     }
 
+    fn wrap_node<V: Serializable, Node: NodeW<V, ExclusiveProxy>>(
+        &mut self,
+        loc: u32,
+        data: ExclusiveProxy,
+    ) -> Result<JournalNode<Node, V, ExclusiveProxy>> {
+        let node = Node::open(loc, data)?;
+        Ok(JournalNode::new(self.journal.clone(), node))
+    }
+
     pub fn new_node<V: Serializable, Node: NodeW<V, ExclusiveProxy>>(
         &mut self,
         is_leaf: bool,
-    ) -> Result<Node> {
+    ) -> Result<JournalNode<Node, V, ExclusiveProxy>> {
         if let Ok(loc) = self.alloc.alloc(1) {
             let new = self.cache.zero_lock(loc as u32)?;
             Node::init(loc as u32, new.clone(), is_leaf)?;
-            Node::open(loc as u32, new)
+            self.wrap_node(loc as u32, new)
         } else {
             // FIXME: resize the node file
             panic!("out of nodes");
@@ -53,7 +73,7 @@ impl NodeCacheInner {
         &mut self,
         n_ptr: NodePtr,
         snap_time: u32,
-    ) -> Result<Node> {
+    ) -> Result<JournalNode<Node, V, ExclusiveProxy>> {
         let old = self.cache.exclusive_lock(n_ptr.loc)?;
         let hdr = read_node_header(&mut old.r())?;
 
@@ -62,12 +82,12 @@ impl NodeCacheInner {
             if let Ok(loc) = self.alloc.alloc(1) {
                 let mut new = self.cache.zero_lock(loc as u32)?;
                 new.rw()[0..].copy_from_slice(&old.r()[0..]);
-                Node::open(loc as u32, new)
+                self.wrap_node(loc as u32, new)
             } else {
                 Err(anyhow::anyhow!("out of metadata blocks"))
             }
         } else {
-            Node::open(n_ptr.loc, old)
+            self.wrap_node(n_ptr.loc, old)
         }
     }
 }
@@ -79,8 +99,12 @@ pub struct NodeCache {
 }
 
 impl NodeCache {
-    pub fn new(cache: Arc<BlockCache>, alloc: BuddyAllocator) -> Self {
-        let inner = Arc::new(Mutex::new(NodeCacheInner::new(cache, alloc)));
+    pub fn new(
+        cache: Arc<BlockCache>,
+        alloc: BuddyAllocator,
+        journal: Arc<Mutex<Journal>>,
+    ) -> Self {
+        let inner = Arc::new(Mutex::new(NodeCacheInner::new(cache, alloc, journal)));
         Self { inner }
     }
 
@@ -100,7 +124,7 @@ impl NodeCache {
     pub fn new_node<V: Serializable, Node: NodeW<V, ExclusiveProxy>>(
         &self,
         is_leaf: bool,
-    ) -> Result<Node> {
+    ) -> Result<JournalNode<Node, V, ExclusiveProxy>> {
         let mut inner = self.inner.lock().unwrap();
         inner.new_node(is_leaf)
     }
@@ -109,7 +133,7 @@ impl NodeCache {
         &self,
         n_ptr: NodePtr,
         snap_time: u32,
-    ) -> Result<Node> {
+    ) -> Result<JournalNode<Node, V, ExclusiveProxy>> {
         let mut inner = self.inner.lock().unwrap();
         inner.shadow(n_ptr, snap_time)
     }
@@ -118,8 +142,8 @@ impl NodeCache {
 //-------------------------------------------------------------------------
 
 pub fn redistribute2<V: Serializable, Node: NodeW<V, ExclusiveProxy>>(
-    left: &mut Node,
-    right: &mut Node,
+    left: &mut JournalNode<Node, V, ExclusiveProxy>,
+    right: &mut JournalNode<Node, V, ExclusiveProxy>,
 ) {
     let nr_left = left.nr_entries();
     let nr_right = right.nr_entries();
@@ -143,14 +167,14 @@ pub fn redistribute2<V: Serializable, Node: NodeW<V, ExclusiveProxy>>(
     }
 }
 
-// FIXME: do we want to move this into BTRree? and redistribute2?
+// FIXME: do we want to move this into BTree? and redistribute2?
 pub fn ensure_space<
     V: Serializable,
     Node: NodeW<V, ExclusiveProxy>,
-    M: Fn(&mut Node, usize) -> NodeInsertOutcome,
+    M: Fn(&mut JournalNode<Node, V, ExclusiveProxy>, usize) -> NodeInsertOutcome,
 >(
     cache: &NodeCache,
-    left: &mut Node,
+    left: &mut JournalNode<Node, V, ExclusiveProxy>,
     idx: usize,
     mutator: M,
 ) -> Result<NodeResult> {

@@ -4,6 +4,7 @@ use anyhow::Result;
 use crate::block_cache::*;
 use crate::btree::node::*;
 use crate::btree::node_cache::*;
+use crate::btree::node_journal::*;
 use crate::packed_array::*;
 
 use crate::btree::BTree;
@@ -66,7 +67,8 @@ impl<
         match self.remove_recurse(self.root, key)? {
             Single(NodeInfo { n_ptr, .. }) => Ok(n_ptr),
             Pair(left, right) => {
-                let mut parent: INodeW = self.cache.new_node(false)?;
+                let mut parent: JournalNode<INodeW, NodePtr, ExclusiveProxy> =
+                    self.cache.new_node(false)?;
                 parent.append(
                     &[left.key_min.unwrap(), right.key_min.unwrap()],
                     &[left.n_ptr, right.n_ptr],
@@ -618,7 +620,8 @@ impl<
         match self.remove_range_recurse(root, key_begin, key_end, split_lt, split_geq)? {
             Single(NodeInfo { n_ptr, .. }) => Ok(n_ptr),
             Pair(left, right) => {
-                let mut parent: INodeW = self.cache.new_node(false)?;
+                let mut parent: JournalNode<INodeW, NodePtr, ExclusiveProxy> =
+                    self.cache.new_node(false)?;
                 parent.append(
                     &[left.key_min.unwrap(), right.key_min.unwrap()],
                     &[left.n_ptr, right.n_ptr],

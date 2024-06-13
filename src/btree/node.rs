@@ -155,8 +155,6 @@ pub trait NodeW<V: Serializable, Data: Writeable>: NodeR<V, Data> {
     fn append(&mut self, keys: &[u32], values: &[V]) -> NodeInsertOutcome;
     fn erase(&mut self, b_idx: usize, e_idx: usize);
 
-    // fn redistribute2(&mut self, rhs: &mut Self);
-
     // FIXME: inconsistent naming in the next two
     fn shift_left(&mut self, count: usize) -> (Vec<u32>, Vec<V>) {
         let r = self.get_entries(0, count);

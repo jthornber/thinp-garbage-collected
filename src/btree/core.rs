@@ -4,6 +4,7 @@ use std::sync::Arc;
 use crate::block_cache::*;
 use crate::btree::node::*;
 use crate::btree::node_cache::*;
+use crate::btree::node_journal::*;
 use crate::packed_array::*;
 
 use crate::btree::BTree;
@@ -69,9 +70,9 @@ impl<
     //-------------------------------
 
     // Call this when recursing back up the spine
-    pub fn node_insert_result(
+    pub fn node_insert_result<N: NodeW<NodePtr, ExclusiveProxy>>(
         &mut self,
-        node: &mut INodeW,
+        node: &mut JournalNode<N, NodePtr, ExclusiveProxy>,
         idx: usize,
         res: &NodeResult,
     ) -> Result<NodeResult> {

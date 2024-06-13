@@ -150,7 +150,6 @@ impl BuddyAllocator {
 
         while b != e {
             let order = calc_min_order(b, e - b);
-            eprintln!("b = {}, order = {}", b, order);
             self.free_order(b, order);
             b += 1 << order;
         }
@@ -270,11 +269,6 @@ fn test_alloc_non_power_of_two() -> Result<()> {
 fn test_grow_allocator_correctly() -> Result<()> {
     let mut buddy = BuddyAllocator::new(53);
     buddy.grow(128 - 53)?;
-
-    // FIXME: remove
-    for i in 0..buddy.free_blocks.len() {
-        eprintln!("slot {} has {} entries", i, buddy.free_blocks[i].len());
-    }
 
     for i in 0..7 {
         assert!(buddy.free_blocks[i].is_empty());

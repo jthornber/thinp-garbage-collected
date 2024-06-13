@@ -10,7 +10,7 @@ mod byte_types;
 mod core;
 mod hash;
 mod iovec;
-mod journal;
+pub mod journal;
 mod lru;
 mod packed_array;
 mod slab;

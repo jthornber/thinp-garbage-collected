@@ -207,15 +207,6 @@ fn pack_op<W: Write>(w: &mut W, op: &Entry) -> Result<()> {
     Ok(())
 }
 
-fn pack_node_ops<W: Write>(w: &mut W, loc: MetadataBlock, ops: &[Entry]) -> Result<()> {
-    w.write_u32::<LittleEndian>(loc)?;
-    w.write_u16::<LittleEndian>(ops.len() as u16)?;
-    for op in ops {
-        pack_op(w, op)?;
-    }
-    Ok(())
-}
-
 fn unpack_op<R: Read>(r: &mut R) -> Result<Entry> {
     use Entry::*;
     let tag = unpack_tag(r)?;
@@ -328,21 +319,87 @@ fn unpack_op<R: Read>(r: &mut R) -> Result<Entry> {
     }
 }
 
-fn unpack_node_ops<R: Read>(r: &mut R) -> Result<(MetadataBlock, Vec<Entry>)> {
-    let loc = r.read_u32::<LittleEndian>()?;
-    let num_ops = r.read_u16::<LittleEndian>()? as usize;
-    let mut ops = Vec::with_capacity(num_ops);
-    for _ in 0..num_ops {
+fn pack_ops<W: Write>(w: &mut W, ops: &[Entry]) -> Result<()> {
+    w.write_u32::<LittleEndian>(ops.len() as u32)?;
+    for op in ops {
+        pack_op(w, op)?;
+    }
+    Ok(())
+}
+
+fn unpack_ops<R: Read>(r: &mut R) -> Result<Vec<Entry>> {
+    let nr_ops = r.read_u32::<LittleEndian>()? as usize;
+    let mut ops = Vec::with_capacity(nr_ops);
+    for _ in 0..nr_ops {
         let op = unpack_op(r)?;
         ops.push(op);
     }
-    Ok((loc, ops))
+    Ok(ops)
 }
+
+fn to_hex(bytes: &[u8]) -> String {
+    use std::fmt::Write;
+
+    let mut output = "0x".to_string();
+    bytes.iter().fold(output, |mut output, b| {
+        let _ = write!(output, "{b:02x}");
+        output
+    })
+}
+
+fn format_op(entry: &Entry) -> String {
+    use Entry::*;
+    match entry {
+        AllocMetadata(b, e) => format!("alloc-m\t{}..{}", b, e),
+        FreeMetadata(b, e) => format!("free-m\t{}..{}", b, e),
+        AllocData(b, e) => format!("alloc-d\t{}..{}", b, e),
+        FreeData(b, e) => format!("free-d\t{}..{}", b, e),
+        NewDev(id, size, root) => format!("NewDev: id={}, size={}, root={}", id, size, root),
+        NewRoot(id, root) => format!("NewRoot: id={}, root={}", id, root),
+        DelDev(id) => format!("DelDev: id={}", id),
+        SetSeq(loc, seq) => format!("seq\t{} <- {}", loc, seq),
+        Zero(loc, begin, end) => format!("zero\t{}@{}..{}", loc, begin, end),
+        Literal(loc, offset, bytes) => {
+            format!("lit\t {}@{} {}", loc, offset, to_hex(bytes))
+        }
+        Shadow(loc, origin) => format!("shadow\t{:?} -> {:?}", loc, origin),
+        Overwrite(loc, idx, k, v) => {
+            format!("ovr\t {}[{}] <- ({}, {})", loc, idx, k, to_hex(v))
+        }
+        Insert(loc, idx, k, v) => format!("ins\t {}[{}] <- ({}, {})", loc, idx, k, to_hex(v)),
+        Prepend(loc, keys, values) => {
+            format!(
+                "pre\t {} <- ({:?}, {:?})",
+                loc,
+                keys,
+                &values.iter().map(|v| to_hex(v)).collect::<Vec<String>>()
+            )
+        }
+        Append(loc, keys, values) => {
+            format!(
+                "app\t {} <- ({:?}, {:?})",
+                loc,
+                keys,
+                &values.iter().map(|v| to_hex(v)).collect::<Vec<String>>()
+            )
+        }
+        Erase(loc, idx_b, idx_e) => format!("erase\t{}[{}..{}]", loc, idx_b, idx_e),
+    }
+}
+
+//-------------------------------------------------------------------------
 
 pub struct Journal {
     slab: SlabFile,
-    nodes: BTreeMap<MetadataBlock, Vec<Entry>>,
+    ops: Vec<Entry>,
     seqs: BTreeMap<MetadataBlock, SequenceNr>,
+}
+
+impl Drop for Journal {
+    fn drop(&mut self) {
+        self.sync().unwrap();
+        self.slab.close();
+    }
 }
 
 type NotifyFn = Box<dyn FnOnce()>;
@@ -359,7 +416,7 @@ impl Journal {
 
         Ok(Self {
             slab,
-            nodes: BTreeMap::new(),
+            ops: Vec::with_capacity(128),
             seqs: BTreeMap::new(),
         })
     }
@@ -368,24 +425,21 @@ impl Journal {
         let slab = SlabFileBuilder::open(path)
             .read(true)
             .write(write)
-            .compressed(true)
             .cache_nr_entries(16)
             .queue_depth(4)
             .build()?;
 
         Ok(Self {
             slab,
-            nodes: BTreeMap::new(),
+            ops: Vec::with_capacity(128),
             seqs: BTreeMap::new(),
         })
     }
 
     /// Node ptr refers to the node before the op, after the op
     /// the seq_nr will be one higher.
-    pub fn add_node_op(&mut self, n: &NodePtr, op: &Entry) -> Result<()> {
-        self.nodes
-            .entry(n.loc)
-            .and_modify(|ops| ops.push(op.clone()));
+    pub fn add_op(&mut self, op: Entry) -> Result<()> {
+        self.ops.push(op);
         Ok(())
     }
 
@@ -396,18 +450,16 @@ impl Journal {
         todo!()
     }
 
-    // FIXME: I'm not sure we need this.  The barriers should be encouragement enough.
     pub fn sync(&mut self) -> Result<()> {
+        // hack
+        if self.ops.is_empty() {
+            return Ok(());
+        }
+
         let mut w: Vec<u8> = Vec::new();
 
-        let mut nodes = BTreeMap::new();
-        std::mem::swap(&mut nodes, &mut self.nodes);
-
-        w.write_u32::<LittleEndian>(nodes.len() as u32)?;
-
-        for (n, ops) in nodes {
-            pack_node_ops(&mut w, n, &ops)?;
-        }
+        pack_ops(&mut w, &self.ops)?;
+        self.ops.clear();
 
         self.slab.write_slab(&w)?;
 
@@ -433,6 +485,18 @@ impl Journal {
         _seq_new: SequenceNr,
     ) -> Result<Vec<Entry>> {
         todo!()
+    }
+
+    pub fn dump<W: Write>(&mut self, out: &mut W) -> Result<()> {
+        for s in 0..self.slab.get_nr_slabs() {
+            let mut bytes = self.slab.read(s as u32)?;
+            let mut r = std::io::Cursor::new(bytes.as_ref());
+            let ops = unpack_ops(&mut r)?;
+            for op in &ops {
+                writeln!(out, "    {}", format_op(op))?;
+            }
+        }
+        Ok(())
     }
 }
 

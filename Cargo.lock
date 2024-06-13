@@ -860,7 +860,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "thinp-garbage-collected"
+name = "thinp-userland"
 version = "0.1.0"
 dependencies = [
  "anyhow",

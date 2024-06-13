@@ -61,6 +61,7 @@ mod test {
     #[allow(dead_code)]
     struct Fixture {
         engine: Arc<dyn IoEngine>,
+        journal: Arc<Mutex<Journal>>,
         cache: Arc<NodeCache>,
         tree: TestTree,
         snap_time: u32,
@@ -75,12 +76,13 @@ mod test {
             let block_cache = Arc::new(BlockCache::new(engine.clone(), 16)?);
             let alloc = BuddyAllocator::new(nr_metadata_blocks as u64);
             let journal_path = PathBuf::from("./journal.log");
-            let journal = Arc::new(Mutex::new(Journal::create(&journal_path)?));
-            let node_cache = Arc::new(NodeCache::new(block_cache, alloc, journal));
+            let journal = Arc::new(Mutex::new(Journal::create(journal_path)?));
+            let node_cache = Arc::new(NodeCache::new(block_cache, alloc, journal.clone()));
             let tree = BTree::empty_tree(node_cache.clone())?;
 
             Ok(Self {
                 engine,
+                journal,
                 cache: node_cache,
                 tree,
                 snap_time: 0,
@@ -91,6 +93,7 @@ mod test {
             self.snap_time += 1;
             Self {
                 engine: self.engine.clone(),
+                journal: self.journal.clone(),
                 cache: self.cache.clone(),
                 tree: self.tree.snap(self.snap_time),
                 snap_time: self.snap_time,

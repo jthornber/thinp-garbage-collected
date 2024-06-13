@@ -51,12 +51,8 @@ where
 {
     // FIXME: I'd like to return  Result<()> from here, but most of the node ops
     // are assumed to be unable to fail.  Revisit.
-    pub fn add_op(&mut self, op: &Entry) {
-        self.journal
-            .lock()
-            .unwrap()
-            .add_node_op(&self.node.n_ptr(), op)
-            .unwrap()
+    pub fn add_op(&mut self, op: Entry) {
+        self.journal.lock().unwrap().add_op(op).unwrap()
     }
 }
 
@@ -67,7 +63,7 @@ where
     Data: Readable,
 {
     fn open(loc: MetadataBlock, data: Data) -> Result<Self> {
-        todo!();
+        unreachable!();
     }
 
     fn n_ptr(&self) -> NodePtr {
@@ -125,14 +121,14 @@ where
     fn overwrite(&mut self, idx: usize, k: u32, value: &V) -> NodeInsertOutcome {
         let loc = self.node.n_ptr().loc;
         let op = Entry::Overwrite(loc, idx as u32, k, to_bytes(value));
-        self.add_op(&op);
+        self.add_op(op);
         self.node.overwrite(idx, k, value)
     }
 
     fn insert(&mut self, idx: usize, k: u32, value: &V) -> NodeInsertOutcome {
         let loc = self.node.n_ptr().loc;
         let op = Entry::Insert(loc, idx as u32, k, to_bytes(value));
-        self.add_op(&op);
+        self.add_op(op);
         self.node.insert(idx, k, value)
     }
 
@@ -140,7 +136,7 @@ where
         let loc = self.node.n_ptr().loc;
         let serialized_values = values.iter().map(|v| to_bytes(v)).collect();
         let op = Entry::Prepend(loc, keys.to_vec(), serialized_values);
-        self.add_op(&op);
+        self.add_op(op);
         self.node.prepend(keys, values)
     }
 
@@ -148,14 +144,14 @@ where
         let loc = self.node.n_ptr().loc;
         let serialized_values = values.iter().map(|v| to_bytes(v)).collect();
         let op = Entry::Append(loc, keys.to_vec(), serialized_values);
-        self.add_op(&op);
+        self.add_op(op);
         self.node.append(keys, values)
     }
 
     fn erase(&mut self, b_idx: usize, e_idx: usize) {
         let loc = self.node.n_ptr().loc;
         let op = Entry::Erase(loc, b_idx as u32, e_idx as u32);
-        self.add_op(&op);
+        self.add_op(op);
         self.node.erase(b_idx, e_idx)
     }
 }

@@ -140,7 +140,6 @@ struct SlabShared {
     file_size: u64,
 }
 
-// FIXME: add index file
 pub struct SlabFile {
     compressed: bool,
     compressor: Option<CompressionService>,
@@ -466,6 +465,7 @@ impl SlabFile {
         (index, tx)
     }
 
+    // FIXME: I think for our use case we should pass in the Vec rather than copying it
     pub fn write_slab(&mut self, data: &[u8]) -> Result<()> {
         let (index, tx) = self.reserve_slab();
         tx.send(SlabData {

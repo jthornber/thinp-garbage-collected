@@ -10,7 +10,7 @@ use crate::packed_array::*;
 
 pub type SequenceNr = u32;
 
-#[derive(Copy, Clone, Eq, PartialEq, PartialOrd, Ord)]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 pub struct NodePtr {
     pub loc: MetadataBlock,
     pub seq_nr: SequenceNr,

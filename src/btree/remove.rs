@@ -549,7 +549,6 @@ impl<
                             return Ok(NodeResult::single(&node));
                         }
                         (Some((k1, v1)), Some((k2, v2))) => {
-                            eprintln!("k1 = {:?}, k2 = {:?}", k1, k2);
                             node.overwrite(idx, k1, &v1);
                             return ensure_space(
                                 self.cache.as_ref(),

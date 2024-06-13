@@ -383,7 +383,7 @@ fn format_op(entry: &Entry) -> String {
                 &values.iter().map(|v| to_hex(v)).collect::<Vec<String>>()
             )
         }
-        Erase(loc, idx_b, idx_e) => format!("erase\t{}[{}..{}]", loc, idx_b, idx_e),
+        Erase(loc, idx_b, idx_e) => format!("era\t{}[{}..{}]", loc, idx_b, idx_e),
     }
 }
 

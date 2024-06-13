@@ -15,7 +15,7 @@ mod test {
     use crate::block_cache::*;
     use crate::btree::node::*;
     use crate::btree::node_cache::*;
-    use crate::btree::simple_node::*;
+    use crate::btree::nodes::simple::*;
     use crate::btree::BTree;
     use crate::core::*;
     use crate::journal::*;

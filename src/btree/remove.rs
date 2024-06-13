@@ -4,7 +4,7 @@ use anyhow::Result;
 use crate::block_cache::*;
 use crate::btree::node::*;
 use crate::btree::node_cache::*;
-use crate::btree::node_journal::*;
+use crate::btree::nodes::journal::*;
 use crate::packed_array::*;
 
 use crate::btree::BTree;

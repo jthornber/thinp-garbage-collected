@@ -54,9 +54,8 @@ mod insert;
 mod lookup;
 mod node;
 pub mod node_cache;
-mod node_journal;
+mod nodes;
 mod remove;
-mod simple_node; // FIXME: rename to node_simple?
 mod tests;
 
 //-------------------------------------------------------------------------

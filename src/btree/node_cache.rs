@@ -4,7 +4,7 @@ use std::sync::{Arc, Mutex};
 use crate::allocators::*;
 use crate::block_cache::*;
 use crate::btree::node::*;
-use crate::btree::node_journal::*;
+use crate::btree::nodes::journal::*;
 use crate::byte_types::*;
 use crate::journal::*;
 use crate::packed_array::*;

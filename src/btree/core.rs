@@ -87,7 +87,10 @@ impl<
                 key_min: Some(new_key),
                 n_ptr,
             }) => {
-                node.overwrite(idx, *new_key, n_ptr);
+                // This check is worth it to save journal entries.
+                if node.get_key(idx) != *new_key || node.get_value(idx) != *n_ptr {
+                    node.overwrite(idx, *new_key, n_ptr);
+                }
                 Ok(NodeResult::single(node))
             }
             Pair(left, right) => {

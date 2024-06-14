@@ -19,7 +19,7 @@ impl<
         LNodeW: NodeW<V, ExclusiveProxy>,
     > BTree<V, INodeR, INodeW, LNodeR, LNodeW>
 {
-    fn remove_internal(&mut self, n_ptr: NodePtr, key: u32) -> Result<NodeResult> {
+    fn remove_internal(&mut self, n_ptr: NodePtr, key: Key) -> Result<NodeResult> {
         let mut node = self
             .cache
             .shadow::<NodePtr, INodeW>(n_ptr, self.snap_time)?;
@@ -40,7 +40,7 @@ impl<
         self.node_insert_result(&mut node, idx, &res)
     }
 
-    fn remove_leaf(&mut self, n_ptr: NodePtr, key: u32) -> Result<NodeResult> {
+    fn remove_leaf(&mut self, n_ptr: NodePtr, key: Key) -> Result<NodeResult> {
         let mut node = self.cache.shadow::<V, LNodeW>(n_ptr, 0)?;
 
         let idx = node.lower_bound(key);
@@ -53,7 +53,7 @@ impl<
         Ok(NodeResult::single(&node))
     }
 
-    fn remove_recurse(&mut self, n_ptr: NodePtr, key: u32) -> Result<NodeResult> {
+    fn remove_recurse(&mut self, n_ptr: NodePtr, key: Key) -> Result<NodeResult> {
         if self.cache.is_internal(n_ptr)? {
             self.remove_internal(n_ptr, key)
         } else {
@@ -61,7 +61,7 @@ impl<
         }
     }
 
-    pub fn remove_(&mut self, key: u32) -> Result<NodePtr> {
+    pub fn remove_(&mut self, key: Key) -> Result<NodePtr> {
         use NodeResult::*;
 
         match self.remove_recurse(self.root, key)? {
@@ -78,7 +78,7 @@ impl<
         }
     }
 
-    pub fn remove(&mut self, key: u32) -> Result<()> {
+    pub fn remove(&mut self, key: Key) -> Result<()> {
         let root = self.remove_(key)?;
         self.root = root;
         Ok(())
@@ -98,7 +98,7 @@ enum NodeOp {
 
 type NodeProgram = Vec<NodeOp>;
 
-fn lt_prog<V: Serializable, N: NodeW<V, ExclusiveProxy>>(node: &N, key: u32) -> NodeProgram {
+fn lt_prog<V: Serializable, N: NodeW<V, ExclusiveProxy>>(node: &N, key: Key) -> NodeProgram {
     use NodeOp::*;
 
     if node.nr_entries() == 0 {
@@ -129,7 +129,7 @@ impl<
     fn remove_lt_internal(
         &mut self,
         n_ptr: NodePtr,
-        key: u32,
+        key: Key,
         split_fn: &ValFn<V>,
     ) -> Result<NodeResult> {
         use NodeOp::*;
@@ -168,7 +168,7 @@ impl<
     fn remove_lt_leaf(
         &mut self,
         n_ptr: NodePtr,
-        key: u32,
+        key: Key,
         split_fn: &ValFn<V>,
     ) -> Result<NodeResult> {
         use NodeOp::*;
@@ -206,7 +206,7 @@ impl<
     pub fn remove_lt_recurse(
         &mut self,
         n_ptr: NodePtr,
-        key: u32,
+        key: Key,
         split_fn: &ValFn<V>,
     ) -> Result<NodeResult> {
         if self.cache.is_internal(n_ptr)? {
@@ -216,21 +216,21 @@ impl<
         }
     }
 
-    fn remove_lt_(&mut self, root: NodePtr, key: u32, split_fn: &ValFn<V>) -> Result<NodePtr> {
+    fn remove_lt_(&mut self, root: NodePtr, key: Key, split_fn: &ValFn<V>) -> Result<NodePtr> {
         match self.remove_lt_recurse(root, key, split_fn)? {
             NodeResult::Single(NodeInfo { n_ptr, .. }) => Ok(n_ptr),
             NodeResult::Pair(_, _) => Err(anyhow!("remove_lt increase nr entries somehow")),
         }
     }
 
-    pub fn remove_lt(&mut self, key: u32, val_fn: &ValFn<V>) -> Result<()> {
+    pub fn remove_lt(&mut self, key: Key, val_fn: &ValFn<V>) -> Result<()> {
         self.root = self.remove_lt_(self.root, key, val_fn)?;
         Ok(())
     }
 }
 //-------------------------------------------------------------------------
 
-fn geq_prog<V: Serializable, N: NodeW<V, ExclusiveProxy>>(node: &N, key: u32) -> NodeProgram {
+fn geq_prog<V: Serializable, N: NodeW<V, ExclusiveProxy>>(node: &N, key: Key) -> NodeProgram {
     use NodeOp::*;
 
     let nr_entries = node.nr_entries();
@@ -267,7 +267,7 @@ impl<
     fn remove_geq_internal(
         &mut self,
         n_ptr: NodePtr,
-        key: u32,
+        key: Key,
         split_fn: &ValFn<V>,
     ) -> Result<NodeResult> {
         use NodeOp::*;
@@ -306,7 +306,7 @@ impl<
     fn remove_geq_leaf(
         &mut self,
         n_ptr: NodePtr,
-        key: u32,
+        key: Key,
         split_fn: &ValFn<V>,
     ) -> Result<NodeResult> {
         use NodeOp::*;
@@ -344,7 +344,7 @@ impl<
     fn remove_geq_recurse(
         &mut self,
         n_ptr: NodePtr,
-        key: u32,
+        key: Key,
         split_fn: &ValFn<V>,
     ) -> Result<NodeResult> {
         if self.cache.is_internal(n_ptr)? {
@@ -354,14 +354,14 @@ impl<
         }
     }
 
-    fn remove_geq_(&mut self, root: NodePtr, key: u32, split_fn: &ValFn<V>) -> Result<NodePtr> {
+    fn remove_geq_(&mut self, root: NodePtr, key: Key, split_fn: &ValFn<V>) -> Result<NodePtr> {
         match self.remove_geq_recurse(root, key, split_fn)? {
             NodeResult::Single(NodeInfo { n_ptr, .. }) => Ok(n_ptr),
             NodeResult::Pair(_, _) => Err(anyhow!("remove_geq increased nr of entries")),
         }
     }
 
-    pub fn remove_geq(&mut self, key: u32, val_fn: &ValFn<V>) -> Result<()> {
+    pub fn remove_geq(&mut self, key: Key, val_fn: &ValFn<V>) -> Result<()> {
         self.root = self.remove_geq_(self.root, key, val_fn)?;
         Ok(())
     }
@@ -376,7 +376,7 @@ enum KeyLoc {
 }
 
 // The key must be >= to the first key in the node.
-fn key_search<V: Serializable, N: NodeW<V, ExclusiveProxy>>(node: &N, k: u32) -> KeyLoc {
+fn key_search<V: Serializable, N: NodeW<V, ExclusiveProxy>>(node: &N, k: Key) -> KeyLoc {
     let idx = node.lower_bound(k);
 
     assert!(idx >= 0);
@@ -392,8 +392,8 @@ fn key_search<V: Serializable, N: NodeW<V, ExclusiveProxy>>(node: &N, k: u32) ->
 // All indexes in the program are *before* any operations were executed
 fn range_split<V: Serializable, N: NodeW<V, ExclusiveProxy>>(
     node: &N,
-    key_begin: u32,
-    key_end: u32,
+    key_begin: Key,
+    key_end: Key,
 ) -> NodeProgram {
     use KeyLoc::*;
     use NodeOp::*;
@@ -462,8 +462,8 @@ impl<
     fn remove_range_internal(
         &mut self,
         n_ptr: NodePtr,
-        key_begin: u32,
-        key_end: u32,
+        key_begin: Key,
+        key_end: Key,
         split_lt: &ValFn<V>,
         split_geq: &ValFn<V>,
     ) -> Result<NodeResult> {
@@ -514,8 +514,8 @@ impl<
     fn remove_range_leaf(
         &mut self,
         n_ptr: NodePtr,
-        key_begin: u32,
-        key_end: u32,
+        key_begin: Key,
+        key_end: Key,
         split_lt: &ValFn<V>,
         split_geq: &ValFn<V>,
     ) -> Result<NodeResult> {
@@ -594,8 +594,8 @@ impl<
     fn remove_range_recurse(
         &mut self,
         n_ptr: NodePtr,
-        key_begin: u32,
-        key_end: u32,
+        key_begin: Key,
+        key_end: Key,
         split_lt: &ValFn<V>,
         split_geq: &ValFn<V>,
     ) -> Result<NodeResult> {
@@ -609,8 +609,8 @@ impl<
     pub fn remove_range_(
         &mut self,
         root: NodePtr,
-        key_begin: u32,
-        key_end: u32,
+        key_begin: Key,
+        key_end: Key,
         split_lt: &ValFn<V>,
         split_geq: &ValFn<V>,
     ) -> Result<NodePtr> {
@@ -632,8 +632,8 @@ impl<
 
     pub fn remove_range(
         &mut self,
-        key_begin: u32,
-        key_end: u32,
+        key_begin: Key,
+        key_end: Key,
         val_lt: &ValFn<V>,
         val_geq: &ValFn<V>,
     ) -> Result<()> {

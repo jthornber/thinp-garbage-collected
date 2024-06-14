@@ -78,11 +78,11 @@ where
         self.node.is_empty()
     }
 
-    fn get_key(&self, idx: usize) -> u32 {
+    fn get_key(&self, idx: usize) -> Key {
         self.node.get_key(idx)
     }
 
-    fn get_key_safe(&self, idx: usize) -> Option<u32> {
+    fn get_key_safe(&self, idx: usize) -> Option<Key> {
         self.node.get_key_safe(idx)
     }
 
@@ -94,11 +94,11 @@ where
         self.node.get_value_safe(idx)
     }
 
-    fn lower_bound(&self, key: u32) -> isize {
+    fn lower_bound(&self, key: Key) -> isize {
         self.node.lower_bound(key)
     }
 
-    fn get_entries(&self, b_idx: usize, e_idx: usize) -> (Vec<u32>, Vec<V>) {
+    fn get_entries(&self, b_idx: usize, e_idx: usize) -> (Vec<Key>, Vec<V>) {
         self.node.get_entries(b_idx, e_idx)
     }
 
@@ -118,21 +118,21 @@ where
         N::init(loc, data, is_leaf)
     }
 
-    fn overwrite(&mut self, idx: usize, k: u32, value: &V) -> NodeInsertOutcome {
+    fn overwrite(&mut self, idx: usize, k: Key, value: &V) -> NodeInsertOutcome {
         let loc = self.node.n_ptr().loc;
         let op = Entry::Overwrite(loc, idx as u32, k, to_bytes(value));
         self.add_op(op);
         self.node.overwrite(idx, k, value)
     }
 
-    fn insert(&mut self, idx: usize, k: u32, value: &V) -> NodeInsertOutcome {
+    fn insert(&mut self, idx: usize, k: Key, value: &V) -> NodeInsertOutcome {
         let loc = self.node.n_ptr().loc;
         let op = Entry::Insert(loc, idx as u32, k, to_bytes(value));
         self.add_op(op);
         self.node.insert(idx, k, value)
     }
 
-    fn prepend(&mut self, keys: &[u32], values: &[V]) -> NodeInsertOutcome {
+    fn prepend(&mut self, keys: &[Key], values: &[V]) -> NodeInsertOutcome {
         let loc = self.node.n_ptr().loc;
         let serialized_values = values.iter().map(|v| to_bytes(v)).collect();
         let op = Entry::Prepend(loc, keys.to_vec(), serialized_values);
@@ -140,7 +140,7 @@ where
         self.node.prepend(keys, values)
     }
 
-    fn append(&mut self, keys: &[u32], values: &[V]) -> NodeInsertOutcome {
+    fn append(&mut self, keys: &[Key], values: &[V]) -> NodeInsertOutcome {
         let loc = self.node.n_ptr().loc;
         let serialized_values = values.iter().map(|v| to_bytes(v)).collect();
         let op = Entry::Append(loc, keys.to_vec(), serialized_values);

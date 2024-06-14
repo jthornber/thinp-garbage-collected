@@ -7,6 +7,7 @@ use std::io::{Read, Write};
 use std::path::Path;
 
 use crate::block_cache::*;
+use crate::btree::node::Key;
 use crate::btree::*;
 use crate::slab::*;
 use crate::types::*;
@@ -34,10 +35,10 @@ pub enum Entry {
     Zero(MetadataBlock, usize, usize), // begin, end (including node header)
     Literal(MetadataBlock, usize, Bytes), // offset, bytes
     Shadow(MetadataBlock, NodePtr),    // origin
-    Overwrite(MetadataBlock, u32, u32, Bytes), // idx, k, v
-    Insert(MetadataBlock, u32, u32, Bytes), // idx, k, v
-    Prepend(MetadataBlock, Vec<u32>, Vec<Bytes>), // keys, values
-    Append(MetadataBlock, Vec<u32>, Vec<Bytes>), // keys, values
+    Overwrite(MetadataBlock, u32, Key, Bytes), // idx, k, v
+    Insert(MetadataBlock, u32, Key, Bytes), // idx, k, v
+    Prepend(MetadataBlock, Vec<Key>, Vec<Bytes>), // keys, values
+    Append(MetadataBlock, Vec<Key>, Vec<Bytes>), // keys, values
     Erase(MetadataBlock, u32, u32),    // idx_b, idx_e
 }
 
@@ -176,14 +177,14 @@ fn pack_op<W: Write>(w: &mut W, op: &Entry) -> Result<()> {
             pack_tag(w, Tag::Overwrite)?;
             w.write_u32::<LittleEndian>(*loc)?;
             w.write_u16::<LittleEndian>(*idx as u16)?;
-            w.write_u32::<LittleEndian>(*k)?;
+            w.write_u64::<LittleEndian>(*k)?;
             pack_bytes(w, v)?;
         }
         Insert(loc, idx, k, v) => {
             pack_tag(w, Tag::Insert)?;
             w.write_u32::<LittleEndian>(*loc)?;
             w.write_u16::<LittleEndian>(*idx as u16)?;
-            w.write_u32::<LittleEndian>(*k)?;
+            w.write_u64::<LittleEndian>(*k)?;
             pack_bytes(w, v)?;
         }
         Prepend(loc, keys, values) => {
@@ -193,7 +194,7 @@ fn pack_op<W: Write>(w: &mut W, op: &Entry) -> Result<()> {
             w.write_u32::<LittleEndian>(*loc)?;
             w.write_u16::<LittleEndian>(keys.len() as u16)?;
             for (k, v) in keys.iter().zip(values.iter()) {
-                w.write_u32::<LittleEndian>(*k)?;
+                w.write_u64::<LittleEndian>(*k)?;
                 pack_bytes(w, v)?;
             }
         }
@@ -204,7 +205,7 @@ fn pack_op<W: Write>(w: &mut W, op: &Entry) -> Result<()> {
             w.write_u32::<LittleEndian>(*loc)?;
             w.write_u16::<LittleEndian>(keys.len() as u16)?;
             for (k, v) in keys.iter().zip(values.iter()) {
-                w.write_u32::<LittleEndian>(*k)?;
+                w.write_u64::<LittleEndian>(*k)?;
                 pack_bytes(w, v)?;
             }
         }
@@ -288,14 +289,14 @@ fn unpack_op<R: Read>(r: &mut R) -> Result<Entry> {
         Tag::Overwrite => {
             let loc = r.read_u32::<LittleEndian>()?;
             let idx = r.read_u16::<LittleEndian>()? as u32;
-            let k = r.read_u32::<LittleEndian>()?;
+            let k = r.read_u64::<LittleEndian>()?;
             let v = unpack_bytes(r)?;
             Ok(Overwrite(loc, idx, k, v))
         }
         Tag::Insert => {
             let loc = r.read_u32::<LittleEndian>()?;
             let idx = r.read_u16::<LittleEndian>()? as u32;
-            let k = r.read_u32::<LittleEndian>()?;
+            let k = r.read_u64::<LittleEndian>()?;
             let v = unpack_bytes(r)?;
             Ok(Insert(loc, idx, k, v))
         }
@@ -305,7 +306,7 @@ fn unpack_op<R: Read>(r: &mut R) -> Result<Entry> {
             let mut keys = Vec::with_capacity(len);
             let mut values = Vec::with_capacity(len);
             for _ in 0..len {
-                keys.push(r.read_u32::<LittleEndian>()?);
+                keys.push(r.read_u64::<LittleEndian>()?);
                 values.push(unpack_bytes(r)?);
             }
             Ok(Prepend(loc, keys, values))
@@ -316,7 +317,7 @@ fn unpack_op<R: Read>(r: &mut R) -> Result<Entry> {
             let mut keys = Vec::with_capacity(len);
             let mut values = Vec::with_capacity(len);
             for _ in 0..len {
-                keys.push(r.read_u32::<LittleEndian>()?);
+                keys.push(r.read_u64::<LittleEndian>()?);
                 values.push(unpack_bytes(r)?);
             }
             Ok(Append(loc, keys, values))

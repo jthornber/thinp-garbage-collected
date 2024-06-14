@@ -17,7 +17,7 @@ impl<
         LNodeW: NodeW<V, ExclusiveProxy>,
     > BTree<V, INodeR, INodeW, LNodeR, LNodeW>
 {
-    pub fn lookup(&self, key: u32) -> Result<Option<V>> {
+    pub fn lookup(&self, key: Key) -> Result<Option<V>> {
         let mut n_ptr = self.root;
 
         loop {
@@ -61,7 +61,7 @@ enum NodeOp {
 
 type NodeProgram = Vec<NodeOp>;
 
-fn lower_bound<V: Serializable, N: NodeR<V, SharedProxy>>(node: &N, key: u32) -> usize {
+fn lower_bound<V: Serializable, N: NodeR<V, SharedProxy>>(node: &N, key: Key) -> usize {
     let idx = node.lower_bound(key);
     if idx < 0 {
         0
@@ -72,8 +72,8 @@ fn lower_bound<V: Serializable, N: NodeR<V, SharedProxy>>(node: &N, key: u32) ->
 
 fn get_prog<V: Serializable, N: NodeR<V, SharedProxy>>(
     node: &N,
-    key_begin: u32,
-    key_end: u32,
+    key_begin: Key,
+    key_end: Key,
 ) -> NodeProgram {
     use NodeOp::*;
 
@@ -111,7 +111,7 @@ fn get_prog<V: Serializable, N: NodeR<V, SharedProxy>>(
     prog
 }
 
-fn get_prog_above<V: Serializable, N: NodeR<V, SharedProxy>>(node: &N, key: u32) -> NodeProgram {
+fn get_prog_above<V: Serializable, N: NodeR<V, SharedProxy>>(node: &N, key: Key) -> NodeProgram {
     use NodeOp::*;
 
     let mut prog = Vec::new();
@@ -134,7 +134,7 @@ fn get_prog_above<V: Serializable, N: NodeR<V, SharedProxy>>(node: &N, key: u32)
     prog
 }
 
-fn get_prog_below<V: Serializable, N: NodeR<V, SharedProxy>>(node: &N, key: u32) -> NodeProgram {
+fn get_prog_below<V: Serializable, N: NodeR<V, SharedProxy>>(node: &N, key: Key) -> NodeProgram {
     use NodeOp::*;
 
     let mut prog = Vec::new();
@@ -163,9 +163,9 @@ fn select_above<
 >(
     cache: &NodeCache,
     n_ptr: NodePtr,
-    key: u32,
+    key: Key,
     val_above: &ValFn<V>,
-    results: &mut Vec<(u32, V)>,
+    results: &mut Vec<(Key, V)>,
 ) -> Result<()> {
     use NodeOp::*;
 
@@ -223,9 +223,9 @@ fn select_below<
 >(
     cache: &NodeCache,
     n_ptr: NodePtr,
-    key: u32,
+    key: Key,
     val_below: &ValFn<V>,
-    results: &mut Vec<(u32, V)>,
+    results: &mut Vec<(Key, V)>,
 ) -> Result<()> {
     use NodeOp::*;
 
@@ -279,7 +279,7 @@ fn select_below<
 fn select_all<V: Serializable, INode: NodeR<NodePtr, SharedProxy>, LNode: NodeR<V, SharedProxy>>(
     cache: &NodeCache,
     n_ptr: NodePtr,
-    results: &mut Vec<(u32, V)>,
+    results: &mut Vec<(Key, V)>,
 ) -> Result<()> {
     if cache.is_internal(n_ptr)? {
         let node: INode = cache.read(n_ptr)?;
@@ -302,11 +302,11 @@ fn select_above_below<
 >(
     cache: &NodeCache,
     n_ptr: NodePtr,
-    key_begin: u32,
-    key_end: u32,
+    key_begin: Key,
+    key_end: Key,
     val_below: &ValFn<V>,
     val_above: &ValFn<V>,
-    results: &mut Vec<(u32, V)>,
+    results: &mut Vec<(Key, V)>,
 ) -> Result<()> {
     use NodeOp::*;
 
@@ -391,11 +391,11 @@ impl<
     /// Returns a vec of key, value pairs
     pub fn lookup_range(
         &self,
-        key_begin: u32,
-        key_end: u32,
+        key_begin: Key,
+        key_end: Key,
         select_above: &ValFn<V>,
         select_below: &ValFn<V>,
-    ) -> Result<Vec<(u32, V)>> {
+    ) -> Result<Vec<(Key, V)>> {
         let mut results = Vec::with_capacity(16);
 
         // FIXME: order of select_* params changes?
@@ -420,14 +420,14 @@ mod tests {
     use super::*;
     struct MockNode {
         loc: MetadataBlock,
-        keys: Vec<u32>,
+        keys: Vec<Key>,
         values: Vec<u32>,
         flags: BTreeFlags,
     }
 
     impl MockNode {
-        fn new(loc: MetadataBlock, keys: Vec<u32>) -> Self {
-            let values = keys.clone();
+        fn new(loc: MetadataBlock, keys: Vec<Key>) -> Self {
+            let values = keys.iter().map(|k| *k as u32).collect();
             MockNode {
                 loc,
                 keys,
@@ -457,11 +457,11 @@ mod tests {
             self.keys.is_empty()
         }
 
-        fn get_key(&self, idx: usize) -> u32 {
+        fn get_key(&self, idx: usize) -> Key {
             self.keys[idx]
         }
 
-        fn get_key_safe(&self, idx: usize) -> Option<u32> {
+        fn get_key_safe(&self, idx: usize) -> Option<Key> {
             self.keys.get(idx).cloned()
         }
 
@@ -473,7 +473,7 @@ mod tests {
             self.values.get(idx).cloned()
         }
 
-        fn lower_bound(&self, key: u32) -> isize {
+        fn lower_bound(&self, key: Key) -> isize {
             if self.is_empty() {
                 return -1;
             }
@@ -498,7 +498,7 @@ mod tests {
             lo
         }
 
-        fn get_entries(&self, b_idx: usize, e_idx: usize) -> (Vec<u32>, Vec<u32>) {
+        fn get_entries(&self, b_idx: usize, e_idx: usize) -> (Vec<Key>, Vec<u32>) {
             (
                 self.keys[b_idx..e_idx].to_vec(),
                 self.values[b_idx..e_idx].to_vec(),

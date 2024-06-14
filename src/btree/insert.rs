@@ -19,7 +19,7 @@ impl<
         LNodeW: NodeW<V, ExclusiveProxy>,
     > BTree<V, INodeR, INodeW, LNodeR, LNodeW>
 {
-    fn insert_into_internal(&mut self, n_ptr: NodePtr, key: u32, value: &V) -> Result<NodeResult> {
+    fn insert_into_internal(&mut self, n_ptr: NodePtr, key: Key, value: &V) -> Result<NodeResult> {
         let mut node = self.cache.shadow::<NodePtr, INodeW>(n_ptr, 0)?;
 
         let mut idx = node.lower_bound(key);
@@ -37,7 +37,7 @@ impl<
         self.node_insert_result(&mut node, idx, &res)
     }
 
-    fn insert_into_leaf(&mut self, n_ptr: NodePtr, key: u32, value: &V) -> Result<NodeResult> {
+    fn insert_into_leaf(&mut self, n_ptr: NodePtr, key: Key, value: &V) -> Result<NodeResult> {
         let mut node = self.cache.shadow::<V, LNodeW>(n_ptr, 0)?;
         let idx = node.lower_bound(key);
 
@@ -67,7 +67,7 @@ impl<
         }
     }
 
-    fn insert_recursive(&mut self, n_ptr: NodePtr, key: u32, value: &V) -> Result<NodeResult> {
+    fn insert_recursive(&mut self, n_ptr: NodePtr, key: Key, value: &V) -> Result<NodeResult> {
         if self.cache.is_internal(n_ptr)? {
             self.insert_into_internal(n_ptr, key, value)
         } else {
@@ -76,7 +76,7 @@ impl<
     }
 
     // Returns the new root
-    pub fn insert_(&mut self, root: NodePtr, key: u32, value: &V) -> Result<NodePtr> {
+    pub fn insert_(&mut self, root: NodePtr, key: Key, value: &V) -> Result<NodePtr> {
         use NodeResult::*;
 
         match self.insert_recursive(root, key, value)? {
@@ -94,7 +94,7 @@ impl<
     }
 
     // FIXME: merge with insert_
-    pub fn insert(&mut self, key: u32, value: &V) -> Result<()> {
+    pub fn insert(&mut self, key: Key, value: &V) -> Result<()> {
         self.root = self.insert_(self.root, key, value)?;
         Ok(())
     }

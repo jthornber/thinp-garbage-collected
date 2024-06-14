@@ -80,8 +80,11 @@ pub fn read_flags(r_proxy: &SharedProxy) -> Result<BTreeFlags> {
 
 //-------------------------------------------------------------------------
 
+/// All keys are 64bit
+pub type Key = u64;
+
 pub struct NodeInfo {
-    pub key_min: Option<u32>,
+    pub key_min: Option<Key>,
     pub n_ptr: NodePtr,
 }
 
@@ -120,14 +123,14 @@ pub trait NodeR<V: Serializable, Data: Readable>: Sized {
     fn n_ptr(&self) -> NodePtr;
     fn nr_entries(&self) -> usize;
     fn is_empty(&self) -> bool;
-    fn get_key(&self, idx: usize) -> u32;
-    fn get_key_safe(&self, idx: usize) -> Option<u32>;
+    fn get_key(&self, idx: usize) -> Key;
+    fn get_key_safe(&self, idx: usize) -> Option<Key>;
     fn get_value(&self, idx: usize) -> V;
     fn get_value_safe(&self, idx: usize) -> Option<V>;
-    fn lower_bound(&self, key: u32) -> isize;
+    fn lower_bound(&self, key: Key) -> isize;
 
     // FIXME: make return type Option
-    fn get_entries(&self, b_idx: usize, e_idx: usize) -> (Vec<u32>, Vec<V>);
+    fn get_entries(&self, b_idx: usize, e_idx: usize) -> (Vec<Key>, Vec<V>);
     fn get_flags(&self) -> BTreeFlags;
 
     fn is_internal(&self) -> bool {
@@ -149,20 +152,20 @@ pub trait NodeW<V: Serializable, Data: Writeable>: NodeR<V, Data> {
     /// Initialises a fresh, empty node.
     fn init(loc: MetadataBlock, data: Data, is_leaf: bool) -> Result<()>;
 
-    fn overwrite(&mut self, idx: usize, k: u32, value: &V) -> NodeInsertOutcome;
-    fn insert(&mut self, idx: usize, k: u32, value: &V) -> NodeInsertOutcome;
-    fn prepend(&mut self, keys: &[u32], values: &[V]) -> NodeInsertOutcome;
-    fn append(&mut self, keys: &[u32], values: &[V]) -> NodeInsertOutcome;
+    fn overwrite(&mut self, idx: usize, k: Key, value: &V) -> NodeInsertOutcome;
+    fn insert(&mut self, idx: usize, k: Key, value: &V) -> NodeInsertOutcome;
+    fn prepend(&mut self, keys: &[Key], values: &[V]) -> NodeInsertOutcome;
+    fn append(&mut self, keys: &[Key], values: &[V]) -> NodeInsertOutcome;
     fn erase(&mut self, b_idx: usize, e_idx: usize);
 
     // FIXME: inconsistent naming in the next two
-    fn shift_left(&mut self, count: usize) -> (Vec<u32>, Vec<V>) {
+    fn shift_left(&mut self, count: usize) -> (Vec<Key>, Vec<V>) {
         let r = self.get_entries(0, count);
         self.erase(0, count);
         r
     }
 
-    fn remove_right(&mut self, count: usize) -> (Vec<u32>, Vec<V>) {
+    fn remove_right(&mut self, count: usize) -> (Vec<Key>, Vec<V>) {
         let e_idx = self.nr_entries();
         let b_idx = e_idx - count;
         let r = self.get_entries(b_idx, e_idx);
@@ -178,13 +181,13 @@ pub trait NodeW<V: Serializable, Data: Writeable>: NodeR<V, Data> {
 
 //-------------------------------------------------------------------------
 
-pub type ValFn<'a, V> = Box<dyn Fn(u32, V) -> Option<(u32, V)> + 'a>;
+pub type ValFn<'a, V> = Box<dyn Fn(Key, V) -> Option<(Key, V)> + 'a>;
 
 #[allow(dead_code)]
 pub fn mk_val_fn<'a, V, F>(f: F) -> ValFn<'a, V>
 where
     V: Serializable,
-    F: Fn(u32, V) -> Option<(u32, V)> + 'a,
+    F: Fn(Key, V) -> Option<(Key, V)> + 'a,
 {
     Box::new(f)
 }

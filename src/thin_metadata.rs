@@ -196,8 +196,7 @@ impl Pool {
             size,
             root: mappings.root(),
         };
-        // FIXME: ThinID is 64bit, need 64bit keys
-        self.infos.insert(id as u32, &info)?;
+        self.infos.insert(id, &info)?;
         self.update_info_root()?;
         Ok(id)
     }
@@ -221,9 +220,8 @@ impl Pool {
         // Insert mappings
         let mut virt_block = 0;
         for (b, e) in runs {
-            // FIXME: need 64bit keys
             mappings.insert(
-                virt_block as u32,
+                virt_block,
                 &Mapping {
                     b,
                     e,
@@ -237,8 +235,7 @@ impl Pool {
             size,
             root: mappings.root(),
         };
-        // FIXME: ThinID is 64bit, need 64bit keys
-        self.infos.insert(id as u32, &info)?;
+        self.infos.insert(id, &info)?;
         self.update_info_root()?;
 
         Ok(id)
@@ -249,12 +246,12 @@ impl Pool {
     }
 
     pub fn delete_thin(&mut self, dev: ThinID) -> Result<()> {
-        // FIXME: need 64bit keys
-        self.infos.remove(dev as u32);
+        self.infos.remove(dev);
         self.update_info_root()?;
         Ok(())
     }
 
+    /*
     pub fn nr_free_data_blocks(&self) -> Result<u64> {
         self.data_alloc.nr_free()
     }
@@ -270,6 +267,7 @@ impl Pool {
     pub fn data_dev_size(&self) -> Result<u64> {
         self.data_alloc.nr_blocks()
     }
+    */
 
     fn get_mapping_tree(&self, dev: ThinID) -> Result<MappingTree> {
         todo!();
@@ -285,14 +283,12 @@ impl Pool {
         let mappings = self.get_mapping_tree(dev)?;
 
         // selects the part of a mapping that is above key_begin
-        let select_above = move |k: u32, m: Mapping| {
-            let k = k as u64; // FIXME: 64bit keys
-
+        let select_above = move |k: Key, m: Mapping| {
             let len = m.e - m.b;
             if k + len > key_begin {
                 let delta = key_begin - k;
                 Some((
-                    key_begin as u32,
+                    key_begin,
                     Mapping {
                         b: m.b + delta,
                         e: m.e,
@@ -305,12 +301,10 @@ impl Pool {
         };
 
         // selects the part of a mapping that is below key_end
-        let select_below = move |k: u32, m: Mapping| {
-            let k = k as u64; // FIXME: 64bit keys
-
+        let select_below = move |k: Key, m: Mapping| {
             if k < key_end {
                 Some((
-                    k as u32,
+                    k,
                     Mapping {
                         b: m.b,
                         e: m.e.min(key_end),
@@ -324,8 +318,8 @@ impl Pool {
 
         // FIXME: need 64bit keys
         let ms = mappings.lookup_range(
-            key_begin as u32,
-            key_end as u32,
+            key_begin,
+            key_end,
             &mk_val_fn(select_above),
             &mk_val_fn(select_below),
         )?;

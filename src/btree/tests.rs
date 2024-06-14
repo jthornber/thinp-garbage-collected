@@ -28,25 +28,25 @@ mod test {
     // We'll test with a value type that is a different size to the internal node values (u32).
     #[derive(Ord, PartialOrd, PartialEq, Eq, Debug, Copy, Clone)]
     struct Value {
-        v: u32,
-        len: u32,
+        v: u64,
+        len: u64,
     }
 
     impl Serializable for Value {
         fn packed_len() -> usize {
-            6
+            16
         }
 
         fn pack<W: Write>(&self, w: &mut W) -> io::Result<()> {
-            w.write_u32::<LittleEndian>(self.v)?;
-            w.write_u16::<LittleEndian>(self.len as u16)?;
+            w.write_u64::<LittleEndian>(self.v)?;
+            w.write_u64::<LittleEndian>(self.len)?;
             Ok(())
         }
 
         fn unpack<R: Read>(r: &mut R) -> io::Result<Self> {
-            let v = r.read_u32::<LittleEndian>()?;
-            let len = r.read_u16::<LittleEndian>()?;
-            Ok(Self { v, len: len as u32 })
+            let v = r.read_u64::<LittleEndian>()?;
+            let len = r.read_u64::<LittleEndian>()?;
+            Ok(Self { v, len })
         }
     }
 
@@ -100,19 +100,19 @@ mod test {
             }
         }
 
-        fn check(&self) -> Result<u32> {
+        fn check(&self) -> Result<u64> {
             self.tree.check()
         }
 
-        fn lookup(&self, key: u32) -> Option<Value> {
+        fn lookup(&self, key: Key) -> Option<Value> {
             self.tree.lookup(key).unwrap()
         }
 
-        fn insert(&mut self, key: u32, value: &Value) -> Result<()> {
+        fn insert(&mut self, key: Key, value: &Value) -> Result<()> {
             self.tree.insert(key, value)
         }
 
-        fn remove(&mut self, key: u32) -> Result<()> {
+        fn remove(&mut self, key: Key) -> Result<()> {
             self.tree.remove(key)
         }
 
@@ -124,7 +124,7 @@ mod test {
         }
     }
 
-    fn mk_value(v: u32) -> Value {
+    fn mk_value(v: u64) -> Value {
         Value { v, len: 3 }
     }
 
@@ -158,12 +158,12 @@ mod test {
         Ok(())
     }
 
-    fn insert_test_(fix: &mut Fixture, keys: &[u32]) -> Result<()> {
+    fn insert_test_(fix: &mut Fixture, keys: &[Key]) -> Result<()> {
         for (i, k) in keys.iter().enumerate() {
             fix.insert(*k, &mk_value(*k * 2))?;
             if i % 1000 == 0 {
                 let n = fix.check()?;
-                ensure!(n == i as u32 + 1);
+                ensure!(n == i as u64 + 1);
             }
         }
 
@@ -174,12 +174,12 @@ mod test {
         }
 
         let n = fix.check()?;
-        ensure!(n == keys.len() as u32);
+        ensure!(n == keys.len() as u64);
 
         Ok(())
     }
 
-    fn insert_test(keys: &[u32]) -> Result<()> {
+    fn insert_test(keys: &[Key]) -> Result<()> {
         // FIXME: put back once garbage collection is working again
         // let mut fix = Fixture::new(1024, 102400)?;
         let mut fix = Fixture::new(4096, 102400)?;
@@ -190,13 +190,13 @@ mod test {
     #[test]
     fn insert_sequence() -> Result<()> {
         let count = 100_000;
-        insert_test(&(0..count).collect::<Vec<u32>>())
+        insert_test(&(0..count).collect::<Vec<Key>>())
     }
 
     #[test]
     fn insert_random() -> Result<()> {
         let count = 100_000;
-        let mut keys: Vec<u32> = (0..count).collect();
+        let mut keys: Vec<Key> = (0..count).collect();
 
         // shuffle the keys
         let mut rng = rand::thread_rng();
@@ -232,7 +232,7 @@ mod test {
         }
         eprintln!("built tree");
 
-        let mut keys: Vec<u32> = (0..count).collect();
+        let mut keys: Vec<Key> = (0..count).collect();
         let mut rng = rand::thread_rng();
         keys.shuffle(&mut rng);
 
@@ -244,7 +244,7 @@ mod test {
                 eprintln!("removed {}", i);
 
                 let n = fix.check()?;
-                ensure!(n == count - i as u32 - 1);
+                ensure!(n == count - i as u64 - 1);
                 eprintln!("checked tree");
             }
         }
@@ -278,7 +278,7 @@ mod test {
         let mut fix = Fixture::new(1024, 102400)?;
         fix.commit()?;
 
-        let no_split = |k: u32, v: Value| Some((k, v));
+        let no_split = |k: Key, v: Value| Some((k, v));
 
         fix.tree.remove_geq(100, &mk_val_fn(no_split))?;
         ensure!(fix.tree.check()? == 0);
@@ -290,14 +290,14 @@ mod test {
         let mut fix = Fixture::new(1024, 102400)?;
         fix.commit()?;
 
-        let no_split = |k: u32, v: Value| Some((k, v));
+        let no_split = |k: Key, v: Value| Some((k, v));
 
         fix.tree.remove_lt(100, &mk_val_fn(no_split))?;
         ensure!(fix.tree.check()? == 0);
         Ok(())
     }
 
-    fn build_tree(fix: &mut Fixture, count: u32) -> Result<()> {
+    fn build_tree(fix: &mut Fixture, count: Key) -> Result<()> {
         fix.commit()?;
 
         for i in 0..count {
@@ -307,10 +307,10 @@ mod test {
         Ok(())
     }
 
-    fn remove_geq_and_verify(fix: &mut Fixture, cut: u32) -> Result<()> {
-        let no_split = |k: u32, v: Value| Some((k, v));
+    fn remove_geq_and_verify(fix: &mut Fixture, cut: Key) -> Result<()> {
+        let no_split = |k: Key, v: Value| Some((k, v));
         fix.tree.remove_geq(cut, &mk_val_fn(no_split))?;
-        ensure!(fix.tree.check()? == cut);
+        ensure!(fix.tree.check()? == cut as u64);
 
         // FIXME: use lookup_range() to verify
         /*
@@ -328,8 +328,8 @@ mod test {
         Ok(())
     }
 
-    fn remove_lt_and_verify(fix: &mut Fixture, count: u32, cut: u32) -> Result<()> {
-        let no_split = |k: u32, v: Value| Some((k, v));
+    fn remove_lt_and_verify(fix: &mut Fixture, count: u64, cut: Key) -> Result<()> {
+        let no_split = |k: Key, v: Value| Some((k, v));
         fix.tree.remove_lt(cut, &mk_val_fn(no_split))?;
         ensure!(fix.tree.check()? == count - cut);
 
@@ -406,7 +406,7 @@ mod test {
         let mut fix = Fixture::new(1024, 102400)?;
 
         let cut = 150;
-        let split = |k: u32, v: Value| {
+        let split = |k: Key, v: Value| {
             if k + v.len > cut {
                 Some((
                     k,
@@ -434,13 +434,13 @@ mod test {
         let mut fix = Fixture::new(1024, 102400)?;
 
         let cut = 150;
-        let split = |k: u32, v: Value| {
+        let split = |k: Key, v: Value| {
             if k < cut && k + v.len >= cut {
                 Some((
                     cut,
                     Value {
                         v: v.v,
-                        len: (k + v.len) - cut,
+                        len: ((k + v.len) - cut),
                     },
                 ))
             } else {
@@ -463,7 +463,7 @@ mod test {
         let range_begin = 150;
         let range_end = 175;
 
-        let split_low = move |k: u32, v: Value| {
+        let split_low = move |k: Key, v: Value| {
             if k + v.len > range_begin {
                 Some((
                     k,
@@ -477,7 +477,7 @@ mod test {
             }
         };
 
-        let split_high = move |k: u32, v: Value| {
+        let split_high = move |k: Key, v: Value| {
             if k < range_end && k + v.len >= range_end {
                 Some((
                     range_end,
@@ -519,7 +519,7 @@ mod test {
         let range_begin = 1001;
         let range_end = 2005;
 
-        let split_low = |k: u32, v: Value| {
+        let split_low = |k: Key, v: Value| {
             if k + v.len > range_begin {
                 Some((
                     k,
@@ -533,7 +533,7 @@ mod test {
             }
         };
 
-        let split_high = |k: u32, v: Value| {
+        let split_high = |k: Key, v: Value| {
             if k < range_end && k + v.len >= range_end {
                 Some((
                     range_end,

@@ -21,7 +21,7 @@ pub struct SimpleNode<V: Serializable, Data: Readable> {
     pub kind: U16<Data>,
     pub nr_entries: U32<Data>,
 
-    pub keys: PArray<u32, Data>,
+    pub keys: PArray<u64, Data>,
     pub values: PArray<V, Data>,
 }
 
@@ -32,7 +32,7 @@ impl<V: Serializable, Data: Readable> SimpleNode<V, Data> {
         let (flags, data) = data.split_at(2);
         let (kind, data) = data.split_at(2);
         let (nr_entries, data) = data.split_at(4);
-        let (keys, values) = data.split_at(Self::max_entries() * std::mem::size_of::<u32>());
+        let (keys, values) = data.split_at(Self::max_entries() * std::mem::size_of::<Key>());
 
         let seq_nr = U32::new(seq_nr);
         let snap_time = U32::new(snap_time);
@@ -55,7 +55,7 @@ impl<V: Serializable, Data: Readable> SimpleNode<V, Data> {
     }
 
     fn max_entries() -> usize {
-        (NODE_SIZE - NODE_HEADER_SIZE) / (std::mem::size_of::<u32>() + std::mem::size_of::<V>())
+        (NODE_SIZE - NODE_HEADER_SIZE) / (std::mem::size_of::<Key>() + std::mem::size_of::<V>())
     }
 
     pub fn has_space(&self, count: usize) -> bool {
@@ -83,11 +83,11 @@ impl<V: Serializable, Data: Readable> NodeR<V, Data> for SimpleNode<V, Data> {
         self.nr_entries() == 0
     }
 
-    fn get_key(&self, idx: usize) -> u32 {
+    fn get_key(&self, idx: usize) -> Key {
         self.keys.get(idx)
     }
 
-    fn get_key_safe(&self, idx: usize) -> Option<u32> {
+    fn get_key_safe(&self, idx: usize) -> Option<Key> {
         self.keys.get_checked(idx)
     }
 
@@ -99,11 +99,11 @@ impl<V: Serializable, Data: Readable> NodeR<V, Data> for SimpleNode<V, Data> {
         self.values.get_checked(idx)
     }
 
-    fn lower_bound(&self, key: u32) -> isize {
+    fn lower_bound(&self, key: Key) -> isize {
         self.keys.bsearch(&key)
     }
 
-    fn get_entries(&self, b_idx: usize, e_idx: usize) -> (Vec<u32>, Vec<V>) {
+    fn get_entries(&self, b_idx: usize, e_idx: usize) -> (Vec<Key>, Vec<V>) {
         (
             self.keys.get_many(b_idx, e_idx),
             self.values.get_many(b_idx, e_idx),
@@ -136,13 +136,13 @@ impl<V: Serializable, Data: Writeable> NodeW<V, Data> for SimpleNode<V, Data> {
         Ok(())
     }
 
-    fn overwrite(&mut self, idx: usize, k: u32, value: &V) -> NodeInsertOutcome {
+    fn overwrite(&mut self, idx: usize, k: Key, value: &V) -> NodeInsertOutcome {
         self.keys.set(idx, &k);
         self.values.set(idx, value);
         NodeInsertOutcome::Success
     }
 
-    fn insert(&mut self, idx: usize, key: u32, value: &V) -> NodeInsertOutcome {
+    fn insert(&mut self, idx: usize, key: Key, value: &V) -> NodeInsertOutcome {
         if self.has_space(1) {
             self.keys.insert_at(idx, &key);
             self.values.insert_at(idx, value);
@@ -153,7 +153,7 @@ impl<V: Serializable, Data: Writeable> NodeW<V, Data> for SimpleNode<V, Data> {
         }
     }
 
-    fn prepend(&mut self, keys: &[u32], values: &[V]) -> NodeInsertOutcome {
+    fn prepend(&mut self, keys: &[Key], values: &[V]) -> NodeInsertOutcome {
         if self.has_space(keys.len()) {
             self.keys.prepend_many(keys);
             self.values.prepend_many(values);
@@ -164,7 +164,7 @@ impl<V: Serializable, Data: Writeable> NodeW<V, Data> for SimpleNode<V, Data> {
         }
     }
 
-    fn append(&mut self, keys: &[u32], values: &[V]) -> NodeInsertOutcome {
+    fn append(&mut self, keys: &[Key], values: &[V]) -> NodeInsertOutcome {
         if self.has_space(keys.len()) {
             self.keys.append_many(keys);
             self.values.append_many(values);

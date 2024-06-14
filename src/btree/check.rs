@@ -19,8 +19,8 @@ impl<
 {
     fn check_keys_<NV: Serializable, Node: NodeR<NV, SharedProxy>>(
         node: &Node,
-        key_min: u32,
-        key_max: Option<u32>,
+        key_min: Key,
+        key_max: Option<Key>,
     ) -> Result<()> {
         // check the keys
         let mut last = None;
@@ -46,10 +46,10 @@ impl<
     fn check_(
         &self,
         n_ptr: NodePtr,
-        key_min: u32,
-        key_max: Option<u32>,
+        key_min: Key,
+        key_max: Option<Key>,
         seen: &mut BTreeSet<u32>,
-    ) -> Result<u32> {
+    ) -> Result<u64> {
         let mut total = 0;
 
         ensure!(!seen.contains(&n_ptr.loc));
@@ -74,7 +74,7 @@ impl<
         } else {
             let node: LNodeR = self.cache.read(n_ptr)?;
             Self::check_keys_(&node, key_min, key_max)?;
-            total += node.nr_entries() as u32;
+            total += node.nr_entries() as u64;
         }
 
         Ok(total)
@@ -82,7 +82,7 @@ impl<
 
     /// Checks the btree is well formed and returns the number of entries
     /// in the tree.
-    pub fn check(&self) -> Result<u32> {
+    pub fn check(&self) -> Result<u64> {
         let mut seen = BTreeSet::new();
         self.check_(self.root, 0, None, &mut seen)
     }

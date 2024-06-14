@@ -269,76 +269,148 @@ impl Pool {
     }
     */
 
-    fn get_mapping_tree(&self, dev: ThinID) -> Result<MappingTree> {
+    fn get_mapping_tree(&self, dev: ThinID) -> Result<(ThinInfo, MappingTree)> {
         todo!();
     }
 
-    // FIXME: can we return impl Iterator?
+    // selects the part of a mapping that is above key_begin
+    fn select_above(key_begin: Key, k: Key, m: Mapping) -> Option<(Key, Mapping)> {
+        let len = m.e - m.b;
+        if k + len > key_begin {
+            let delta = key_begin - k;
+            Some((
+                key_begin,
+                Mapping {
+                    b: m.b + delta,
+                    e: m.e,
+                    snap_time: m.snap_time,
+                },
+            ))
+        } else {
+            None
+        }
+    }
+
+    // selects the part of a mapping that is below key_end
+    fn select_below(key_end: Key, k: Key, m: Mapping) -> Option<(Key, Mapping)> {
+        if k < key_end {
+            Some((
+                k,
+                Mapping {
+                    b: m.b,
+                    e: m.e.min(key_end),
+                    snap_time: m.snap_time,
+                },
+            ))
+        } else {
+            None
+        }
+    }
+
     pub fn get_read_mapping(
         &self,
-        dev: ThinID,
-        key_begin: VBlock,
-        key_end: VBlock,
+        id: ThinID,
+        thin_begin: VBlock,
+        thin_end: VBlock,
     ) -> Result<Vec<(u64, Mapping)>> {
-        let mappings = self.get_mapping_tree(dev)?;
+        let (_, mappings) = self.get_mapping_tree(id)?;
 
-        // selects the part of a mapping that is above key_begin
-        let select_above = move |k: Key, m: Mapping| {
-            let len = m.e - m.b;
-            if k + len > key_begin {
-                let delta = key_begin - k;
-                Some((
-                    key_begin,
-                    Mapping {
-                        b: m.b + delta,
-                        e: m.e,
-                        snap_time: m.snap_time,
-                    },
-                ))
-            } else {
-                None
-            }
-        };
+        let select_above =
+            mk_val_fn(move |k: Key, m: Mapping| Self::select_above(thin_begin, k, m));
+        let select_below = mk_val_fn(move |k: Key, m: Mapping| Self::select_below(thin_end, k, m));
 
-        // selects the part of a mapping that is below key_end
-        let select_below = move |k: Key, m: Mapping| {
-            if k < key_end {
-                Some((
-                    k,
-                    Mapping {
-                        b: m.b,
-                        e: m.e.min(key_end),
-                        snap_time: m.snap_time,
-                    },
-                ))
-            } else {
-                None
-            }
-        };
+        mappings.lookup_range(thin_begin, thin_end, &select_above, &select_below)
+    }
 
-        // FIXME: need 64bit keys
-        let ms = mappings.lookup_range(
-            key_begin,
-            key_end,
-            &mk_val_fn(select_above),
-            &mk_val_fn(select_below),
-        )?;
+    fn provision(
+        &mut self,
+        mappings: &mut MappingTree,
+        vbegin: VBlock,
+        vend: VBlock,
+    ) -> Result<Mapping> {
+        // Don't fill this in, I'll do it.
+        todo!();
+    }
 
-        // FIXME 64bit keys
-        Ok(ms.iter().map(|(k, m)| (*k as u64, m.clone())).collect())
+    fn should_break_sharing(info: &ThinInfo, m: &Mapping) -> bool {
+        // Don't fill this in, I'll do it.
+        todo!();
+    }
+
+    fn break_sharing(
+        &mut self,
+        mappings: &mut MappingTree,
+        vbegin: VBlock,
+        m: Mapping,
+    ) -> Result<Mapping> {
+        // Don't fill this in, I'll do it.
+        todo!();
+    }
+
+    fn update_mappings_root(
+        &mut self,
+        id: ThinID,
+        info: &mut ThinInfo,
+        mappings: &MappingTree,
+    ) -> Result<()> {
+        info.root = mappings.root();
+        self.infos.insert(id, info)?;
+        self.update_info_root()
     }
 
     pub fn get_write_mapping(
-        &self,
-        _dev: ThinID,
-        _key_begin: VBlock,
-        _key_end: VBlock,
-    ) -> Result<VecDeque<Run>> {
-        todo!();
+        &mut self,
+        id: ThinID,
+        thin_begin: VBlock,
+        thin_end: VBlock,
+    ) -> Result<Vec<(VBlock, Mapping)>> {
+        let (mut info, mut mappings) = self.get_mapping_tree(id)?;
+
+        let select_above =
+            mk_val_fn(move |k: Key, m: Mapping| Self::select_above(thin_begin, k, m));
+        let select_below = mk_val_fn(move |k: Key, m: Mapping| Self::select_below(thin_end, k, m));
+
+        let ms = mappings.lookup_range(thin_begin, thin_end, &select_above, &select_below)?;
+
+        // Provision any gaps
+        let mut current = thin_begin;
+        let mut provisioned: Vec<(VBlock, Mapping)> = Vec::new();
+        for (k, m) in ms.iter() {
+            if current < *k {
+                // Provision new mapping for the gap
+                let new_mapping = self.provision(&mut mappings, current, *k)?;
+                provisioned.push((current, new_mapping));
+            }
+            provisioned.push((*k, *m));
+            current = m.e;
+        }
+
+        if current < thin_end {
+            // Provision new mapping for the remaining gap
+            let new_mapping = self.provision(&mut mappings, current, thin_end)?;
+            provisioned.push((current, new_mapping));
+        }
+
+        // Break sharing if needed
+        for (k, m) in provisioned.iter_mut() {
+            if Self::should_break_sharing(&info.clone(), m) {
+                *m = self.break_sharing(&mut mappings, *k as VBlock, *m)?;
+            }
+        }
+
+        self.update_mappings_root(id, &mut info, &mappings)?;
+        Ok(provisioned)
     }
 
-    pub fn discard(&mut self, _dev: ThinID, _key_begin: VBlock, _key_end: VBlock) -> Result<()> {
-        todo!();
+    pub fn discard(&mut self, id: ThinID, thin_begin: VBlock, thin_end: VBlock) -> Result<()> {
+        let (mut info, mut mappings) = self.get_mapping_tree(id)?;
+
+        let select_above =
+            mk_val_fn(move |k: Key, m: Mapping| Self::select_above(thin_begin, k, m));
+        let select_below = mk_val_fn(move |k: Key, m: Mapping| Self::select_below(thin_end, k, m));
+
+        mappings.remove_range(thin_begin, thin_end, &select_below, &select_above)?;
+        self.update_mappings_root(id, &mut info, &mappings)
     }
 }
 

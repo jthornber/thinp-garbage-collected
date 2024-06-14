@@ -57,10 +57,61 @@ impl BuddyAllocator {
         alloc
     }
 
-    // FIXME: the next three functions can be implemented with bit banging.  See Hacker's Delight.
+    fn alloc_order(&mut self, order: usize) -> Result<u64> {
+        // We search up through the orders looking for one that
+        // contains some free blocks.  We then split this block
+        // back down through the orders, until we have one of the
+        // desired size.
+        let mut high_order = order;
+        loop {
+            if high_order >= self.free_blocks.len() {
+                return Err(MemErr::OutOfSpace);
+            }
+            if !self.free_blocks[high_order].is_empty() {
+                break;
+            }
+            high_order += 1;
+        }
 
+        let index = self.free_blocks[high_order].pop_first().unwrap();
+
+        // Split back down
+        while high_order != order {
+            high_order -= 1;
+            self.free_blocks[high_order].insert(get_buddy(index, high_order));
+        }
+
+        Ok(index)
+    }
+
+    fn free_order(&mut self, mut block: u64, mut order: usize) -> Result<()> {
+        loop {
+            let buddy = get_buddy(block, order);
+
+            // Is the buddy free at this order?
+            if !self.free_blocks[order].contains(&buddy) {
+                break;
+            }
+            self.free_blocks[order].remove(&buddy);
+            order += 1;
+
+            if buddy < block {
+                block = buddy;
+            }
+
+            if order == self.free_blocks.len() {
+                break;
+            }
+        }
+
+        self.free_blocks[order].insert(block);
+        Ok(())
+    }
+}
+
+impl Allocator for BuddyAllocator {
     /// Succeeds if _any_ blocks were pre-allocated.
-    pub fn alloc_many(&mut self, nr_blocks: u64, min_order: usize) -> Result<(u64, Vec<AllocRun>)> {
+    fn alloc_many(&mut self, nr_blocks: u64, min_order: usize) -> Result<(u64, Vec<AllocRun>)> {
         let mut total_allocated = 0;
         let mut runs = Vec::new();
         let mut order = calc_order(nr_blocks);
@@ -93,7 +144,7 @@ impl BuddyAllocator {
     }
 
     // Allocate a block of the given size (in number of blocks).
-    pub fn alloc(&mut self, nr_blocks: u64) -> Result<u64> {
+    fn alloc(&mut self, nr_blocks: u64) -> Result<u64> {
         if nr_blocks == 0 {
             return Err(MemErr::BadParams("cannot allocate zero blocks".to_string()));
         }
@@ -112,35 +163,8 @@ impl BuddyAllocator {
         Ok(index)
     }
 
-    pub fn alloc_order(&mut self, order: usize) -> Result<u64> {
-        // We search up through the orders looking for one that
-        // contains some free blocks.  We then split this block
-        // back down through the orders, until we have one of the
-        // desired size.
-        let mut high_order = order;
-        loop {
-            if high_order >= self.free_blocks.len() {
-                return Err(MemErr::OutOfSpace);
-            }
-            if !self.free_blocks[high_order].is_empty() {
-                break;
-            }
-            high_order += 1;
-        }
-
-        let index = self.free_blocks[high_order].pop_first().unwrap();
-
-        // Split back down
-        while high_order != order {
-            high_order -= 1;
-            self.free_blocks[high_order].insert(get_buddy(index, high_order));
-        }
-
-        Ok(index)
-    }
-
     // Free a previously allocated block.
-    pub fn free(&mut self, block: u64, nr_blocks: u64) -> Result<()> {
+    fn free(&mut self, block: u64, nr_blocks: u64) -> Result<()> {
         if nr_blocks == 0 {
             return Err(MemErr::BadParams("cannot free zero blocks".to_string()));
         }
@@ -156,33 +180,8 @@ impl BuddyAllocator {
 
         Ok(())
     }
-
-    pub fn free_order(&mut self, mut block: u64, mut order: usize) -> Result<()> {
-        loop {
-            let buddy = get_buddy(block, order);
-
-            // Is the buddy free at this order?
-            if !self.free_blocks[order].contains(&buddy) {
-                break;
-            }
-            self.free_blocks[order].remove(&buddy);
-            order += 1;
-
-            if buddy < block {
-                block = buddy;
-            }
-
-            if order == self.free_blocks.len() {
-                break;
-            }
-        }
-
-        self.free_blocks[order].insert(block);
-        Ok(())
-    }
-
     // Grow the pool by adding extra blocks.
-    pub fn grow(&mut self, nr_extra_blocks: u64) -> Result<()> {
+    fn grow(&mut self, nr_extra_blocks: u64) -> Result<()> {
         if nr_extra_blocks == 0 {
             return Err(MemErr::BadParams("Cannot grow by zero blocks".to_string()));
         }
@@ -201,6 +200,8 @@ impl BuddyAllocator {
         Ok(())
     }
 }
+
+//-------------------------------------
 
 #[test]
 fn test_create_allocator() -> Result<()> {

@@ -44,14 +44,12 @@ impl DataAlloc {
 
     /// Preallocate more space from the global allocator
     fn prealloc(&mut self) -> Result<()> {
-        eprintln!("v");
         let (_total, runs) = {
             let mut global_alloc = self.global_alloc.lock().unwrap();
             global_alloc
                 .alloc_many(self.prealloc_size, 0)
                 .expect("Failed to preallocate additional space for DataAlloc")
         };
-        eprintln!("^");
 
         // Add the new runs to the local allocator
         for (b, e) in runs {

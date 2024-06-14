@@ -29,4 +29,11 @@ pub enum MemErr {
 pub type Result<T> = result::Result<T, MemErr>;
 pub type AllocRun = (u64, u64);
 
+pub trait Allocator {
+    fn alloc_many(&mut self, nr_blocks: u64, min_order: usize) -> Result<(u64, Vec<AllocRun>)>;
+    fn alloc(&mut self, nr_blocks: u64) -> Result<u64>;
+    fn free(&mut self, block: u64, nr_blocks: u64) -> Result<()>;
+    fn grow(&mut self, nr_extra_blocks: u64) -> Result<()>;
+}
+
 //-------------------------------------

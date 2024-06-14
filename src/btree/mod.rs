@@ -52,9 +52,9 @@ mod check;
 mod core;
 mod insert;
 mod lookup;
-mod node;
+pub mod node;
 pub mod node_cache;
-mod nodes;
+pub mod nodes;
 mod remove;
 mod tests;
 

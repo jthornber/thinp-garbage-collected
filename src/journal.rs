@@ -28,9 +28,7 @@ pub enum Entry {
     FreeData(PBlock, PBlock),  // begin, end
     GrowData(PBlock),          // nr_extra_blocks
 
-    NewDev(ThinID, VBlock, MetadataBlock), // id, size, id, root
-    NewRoot(ThinID, MetadataBlock),
-    DelDev(ThinID),
+    UpdateInfoRoot(NodePtr),
 
     SetSeq(MetadataBlock, SequenceNr), // Only used when rereading output log
     Zero(MetadataBlock, usize, usize), // begin, end (including node header)
@@ -54,9 +52,7 @@ enum Tag {
     FreeData,
     GrowData,
 
-    NewDev,
-    NewRoot,
-    DelDev,
+    UpdateInfoRoot,
 
     SetSeq,
     Zero,
@@ -147,21 +143,12 @@ fn pack_op<W: Write>(w: &mut W, op: &Entry) -> Result<()> {
             w.write_u64::<LittleEndian>(*extra)?;
         }
 
-        NewDev(id, size, root) => {
-            pack_tag(w, Tag::NewDev)?;
-            w.write_u64::<LittleEndian>(*id)?;
-            w.write_u64::<LittleEndian>(*size)?;
-            w.write_u32::<LittleEndian>(*root)?;
+        UpdateInfoRoot(root) => {
+            pack_tag(w, Tag::UpdateInfoRoot)?;
+            w.write_u32::<LittleEndian>(root.loc)?;
+            w.write_u32::<LittleEndian>(root.seq_nr)?;
         }
-        NewRoot(id, root) => {
-            pack_tag(w, Tag::NewRoot)?;
-            w.write_u64::<LittleEndian>(*id)?;
-            w.write_u32::<LittleEndian>(*root)?;
-        }
-        DelDev(id) => {
-            pack_tag(w, Tag::DelDev)?;
-            w.write_u64::<LittleEndian>(*id)?;
-        }
+
         SetSeq(loc, seq) => {
             pack_tag(w, Tag::SetSeq)?;
             w.write_u32::<LittleEndian>(*loc)?;
@@ -262,20 +249,11 @@ fn unpack_op<R: Read>(r: &mut R) -> Result<Entry> {
             Ok(GrowData(extra))
         }
 
-        Tag::NewDev => {
-            let id = r.read_u64::<LittleEndian>()?;
-            let size = r.read_u64::<LittleEndian>()?;
-            let root = r.read_u32::<LittleEndian>()?;
-            Ok(NewDev(id, size, root))
-        }
-        Tag::NewRoot => {
-            let id = r.read_u64::<LittleEndian>()?;
-            let root = r.read_u32::<LittleEndian>()?;
-            Ok(NewRoot(id, root))
-        }
-        Tag::DelDev => {
-            let id = r.read_u64::<LittleEndian>()?;
-            Ok(DelDev(id))
+        Tag::UpdateInfoRoot => {
+            let loc = r.read_u32::<LittleEndian>()?;
+            let seq_nr = r.read_u32::<LittleEndian>()?;
+
+            Ok(UpdateInfoRoot(NodePtr { loc, seq_nr }))
         }
 
         Tag::SetSeq => {
@@ -386,12 +364,13 @@ fn format_op(entry: &Entry) -> String {
         AllocMetadata(b, e) => format!("alm\t{}..{}", b, e),
         FreeMetadata(b, e) => format!("frm\t{}..{}", b, e),
         GrowMetadata(extra) => format!("grm\t{}", extra),
+
         AllocData(b, e) => format!("ald\t{}..{}", b, e),
         FreeData(b, e) => format!("frd\t{}..{}", b, e),
         GrowData(extra) => format!("grd\t{}", extra),
-        NewDev(id, size, root) => format!("NewDev: id={}, size={}, root={}", id, size, root),
-        NewRoot(id, root) => format!("NewRoot: id={}, root={}", id, root),
-        DelDev(id) => format!("DelDev: id={}", id),
+
+        UpdateInfoRoot(root) => format!("uir {}:{}", root.loc, root.seq_nr),
+
         SetSeq(loc, seq) => format!("seq\t{} <- {}", loc, seq),
         Zero(loc, begin, end) => format!("zero\t{}@{}..{}", loc, begin, end),
         Literal(loc, offset, bytes) => {

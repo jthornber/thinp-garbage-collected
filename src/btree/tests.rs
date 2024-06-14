@@ -72,11 +72,11 @@ mod test {
             // We only cope with powers of two atm.
             assert!(nr_metadata_blocks.count_ones() == 1);
 
+            let journal_path = PathBuf::from("./journal.log");
+            let journal = Arc::new(Mutex::new(Journal::create(journal_path)?));
             let engine = mk_engine(nr_metadata_blocks);
             let block_cache = Arc::new(BlockCache::new(engine.clone(), 16)?);
             let alloc = BuddyAllocator::new(nr_metadata_blocks as u64);
-            let journal_path = PathBuf::from("./journal.log");
-            let journal = Arc::new(Mutex::new(Journal::create(journal_path)?));
             let node_cache = Arc::new(NodeCache::new(block_cache, alloc, journal.clone()));
             let tree = BTree::empty_tree(node_cache.clone())?;
 

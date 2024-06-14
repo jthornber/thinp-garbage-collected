@@ -20,11 +20,13 @@ pub type Bytes = Vec<u8>;
 /// Operations that can be performed on a node.
 #[derive(Clone, Eq, PartialEq, PartialOrd, Ord)]
 pub enum Entry {
-    AllocMetadata(VBlock, VBlock), // begin, end
-    FreeMetadata(VBlock, VBlock),  // begin, end
+    AllocMetadata(u32, u32), // begin, end
+    FreeMetadata(u32, u32),  // begin, end
+    GrowMetadata(u32),       // nr_extra_blocks
 
     AllocData(PBlock, PBlock), // begin, end
-    FreeData(VBlock, VBlock),  // begin, end
+    FreeData(PBlock, PBlock),  // begin, end
+    GrowData(PBlock),          // nr_extra_blocks
 
     NewDev(ThinID, VBlock, MetadataBlock), // id, size, id, root
     NewRoot(ThinID, MetadataBlock),
@@ -45,10 +47,12 @@ pub enum Entry {
 #[repr(u8)]
 enum Tag {
     AllocMetadata,
-    AllocData,
-
     FreeMetadata,
+    GrowMetadata,
+
+    AllocData,
     FreeData,
+    GrowData,
 
     NewDev,
     NewRoot,
@@ -89,10 +93,22 @@ fn unpack_bytes<R: Read>(r: &mut R) -> Result<Bytes> {
     Ok(buffer)
 }
 
+fn pack_begin_end_32<W: Write>(w: &mut W, begin: u32, end: u32) -> Result<()> {
+    w.write_u32::<LittleEndian>(begin)?;
+    w.write_u32::<LittleEndian>(end)?;
+    Ok(())
+}
+
 fn pack_begin_end<W: Write>(w: &mut W, begin: VBlock, end: VBlock) -> Result<()> {
     w.write_u64::<LittleEndian>(begin)?;
     w.write_u64::<LittleEndian>(end)?;
     Ok(())
+}
+
+fn unpack_begin_end_32<R: Read>(r: &mut R) -> Result<(u32, u32)> {
+    let b = r.read_u32::<LittleEndian>()?;
+    let e = r.read_u32::<LittleEndian>()?;
+    Ok((b, e))
 }
 
 fn unpack_begin_end<R: Read>(r: &mut R) -> Result<(u64, u64)> {
@@ -107,21 +123,30 @@ fn pack_op<W: Write>(w: &mut W, op: &Entry) -> Result<()> {
     match op {
         AllocMetadata(b, e) => {
             pack_tag(w, Tag::AllocMetadata)?;
-            pack_begin_end(w, *b, *e)?;
+            pack_begin_end_32(w, *b, *e)?;
         }
+        FreeMetadata(b, e) => {
+            pack_tag(w, Tag::FreeMetadata)?;
+            pack_begin_end_32(w, *b, *e)?;
+        }
+        GrowMetadata(extra) => {
+            pack_tag(w, Tag::GrowMetadata)?;
+            w.write_u32::<LittleEndian>(*extra)?;
+        }
+
         AllocData(b, e) => {
             pack_tag(w, Tag::AllocData)?;
             pack_begin_end(w, *b, *e)?;
         }
-
         FreeData(b, e) => {
             pack_tag(w, Tag::FreeData)?;
             pack_begin_end(w, *b, *e)?;
         }
-        FreeMetadata(b, e) => {
-            pack_tag(w, Tag::FreeMetadata)?;
-            pack_begin_end(w, *b, *e)?;
+        GrowData(extra) => {
+            pack_tag(w, Tag::GrowData)?;
+            w.write_u64::<LittleEndian>(*extra)?;
         }
+
         NewDev(id, size, root) => {
             pack_tag(w, Tag::NewDev)?;
             w.write_u64::<LittleEndian>(*id)?;
@@ -212,12 +237,16 @@ fn unpack_op<R: Read>(r: &mut R) -> Result<Entry> {
     let tag = unpack_tag(r)?;
     match tag {
         Tag::AllocMetadata => {
-            let (b, e) = unpack_begin_end(r)?;
+            let (b, e) = unpack_begin_end_32(r)?;
             Ok(AllocMetadata(b, e))
         }
         Tag::FreeMetadata => {
-            let (b, e) = unpack_begin_end(r)?;
+            let (b, e) = unpack_begin_end_32(r)?;
             Ok(FreeMetadata(b, e))
+        }
+        Tag::GrowMetadata => {
+            let extra = r.read_u32::<LittleEndian>()?;
+            Ok(GrowMetadata(extra))
         }
 
         Tag::AllocData => {
@@ -227,6 +256,10 @@ fn unpack_op<R: Read>(r: &mut R) -> Result<Entry> {
         Tag::FreeData => {
             let (b, e) = unpack_begin_end(r)?;
             Ok(FreeData(b, e))
+        }
+        Tag::GrowData => {
+            let extra = r.read_u64::<LittleEndian>()?;
+            Ok(GrowData(extra))
         }
 
         Tag::NewDev => {
@@ -350,10 +383,12 @@ fn to_hex(bytes: &[u8]) -> String {
 fn format_op(entry: &Entry) -> String {
     use Entry::*;
     match entry {
-        AllocMetadata(b, e) => format!("alloc-m\t{}..{}", b, e),
-        FreeMetadata(b, e) => format!("free-m\t{}..{}", b, e),
-        AllocData(b, e) => format!("alloc-d\t{}..{}", b, e),
-        FreeData(b, e) => format!("free-d\t{}..{}", b, e),
+        AllocMetadata(b, e) => format!("alm\t{}..{}", b, e),
+        FreeMetadata(b, e) => format!("frm\t{}..{}", b, e),
+        GrowMetadata(extra) => format!("grm\t{}", extra),
+        AllocData(b, e) => format!("ald\t{}..{}", b, e),
+        FreeData(b, e) => format!("frd\t{}..{}", b, e),
+        GrowData(extra) => format!("grd\t{}", extra),
         NewDev(id, size, root) => format!("NewDev: id={}, size={}, root={}", id, size, root),
         NewRoot(id, root) => format!("NewRoot: id={}, root={}", id, root),
         DelDev(id) => format!("DelDev: id={}", id),

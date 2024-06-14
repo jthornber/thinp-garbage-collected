@@ -1,6 +1,7 @@
 mod bits;
 mod buddy_alloc;
 pub mod data_alloc;
+pub mod journal;
 pub mod metadata_alloc;
 
 //-------------------------------------

@@ -1,6 +1,7 @@
 use anyhow::Result;
 use std::sync::{Arc, Mutex};
 
+use crate::allocators::journal::*;
 use crate::allocators::*;
 use crate::block_cache::*;
 use crate::btree::node::*;
@@ -13,7 +14,7 @@ use crate::packed_array::*;
 
 // FIXME: make thread safe
 pub struct NodeCacheInner {
-    alloc: BuddyAllocator,
+    alloc: JournalAlloc<BuddyAllocator>,
     cache: Arc<BlockCache>,
     journal: Arc<Mutex<Journal>>,
 }
@@ -25,7 +26,7 @@ impl NodeCacheInner {
         journal: Arc<Mutex<Journal>>,
     ) -> Self {
         Self {
-            alloc,
+            alloc: JournalAlloc::new(alloc, journal.clone(), AllocKind::Metadata),
             cache,
             journal,
         }

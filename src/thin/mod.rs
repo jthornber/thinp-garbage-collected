@@ -331,8 +331,7 @@ impl Pool {
     }
 
     pub fn create_thin_(&mut self, size: VBlock) -> Result<(ThinID, MappingTree)> {
-        let j = self.journaller();
-        j.batch(|| {
+        self.journaller().batch(|| {
             // Choose a new id
             let id = self.new_thin_id();
 
@@ -344,8 +343,7 @@ impl Pool {
     }
 
     pub fn create_thin(&mut self, size: VBlock) -> Result<ThinID> {
-        let j = self.journaller();
-        j.batch(|| {
+        self.journaller().batch(|| {
             let (id, mappings) = self.create_thin_(size)?;
             // Add thin_info to btree
             let info = ThinInfo {
@@ -360,8 +358,7 @@ impl Pool {
     }
 
     pub fn create_thick(&mut self, size: VBlock) -> Result<ThinID> {
-        let j = self.journaller();
-        j.batch(|| {
+        self.journaller().batch(|| {
             // Create a new thin
             let (id, mut mappings) = self.create_thin_(size)?;
             let mut ops = Ops::default();
@@ -384,8 +381,7 @@ impl Pool {
     }
 
     pub fn create_snap(&mut self, origin: ThinID) -> Result<ThinID> {
-        let j = self.journaller();
-        j.batch(|| {
+        self.journaller().batch(|| {
             // Get the mapping tree and info for the origin thin device
             let (mut origin_info, mut origin_mappings) = self.get_mapping_tree(origin)?;
 
@@ -417,8 +413,7 @@ impl Pool {
     }
 
     pub fn delete_thin(&mut self, dev: ThinID) -> Result<()> {
-        let j = self.journaller();
-        j.batch(|| {
+        self.journaller().batch(|| {
             self.infos.remove(dev);
             self.update_info_root()?;
             Ok(())
@@ -525,7 +520,6 @@ impl Pool {
         self.update_info_root()
     }
 
-    // FIXME: should we combine d_ops and m_ops?
     fn provision(
         &mut self,
         begin: VBlock,
@@ -647,8 +641,7 @@ impl Pool {
         let (mut info, mut mappings) = self.get_mapping_tree(id)?;
         let ms = Self::lookup_range(&mappings, thin_begin, thin_end)?;
 
-        let j = self.journaller();
-        j.batch(|| {
+        self.journaller().batch(|| {
             let mut ops = Ops::default();
 
             let mut current = thin_begin;
@@ -699,8 +692,7 @@ impl Pool {
     }
 
     pub fn discard(&mut self, id: ThinID, thin_begin: VBlock, thin_end: VBlock) -> Result<()> {
-        let j = self.journaller();
-        j.batch(|| {
+        self.journaller().batch(|| {
             let (mut info, mut mappings) = self.get_mapping_tree(id)?;
             self.discard_(&mut mappings, thin_begin, thin_end)?;
             self.update_mappings_root(id, &mut info, &mappings)

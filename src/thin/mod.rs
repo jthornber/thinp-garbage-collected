@@ -602,7 +602,10 @@ impl Pool {
         Ok(result)
     }
 
-    // FIXME: what happens if we fail part way through?
+    // FIXME: what happens if we fail part way through?  Fail hard and let journal recovery sort
+    // it?  Or we could throw away the current journal batch *and* any changes to metadata, then
+    // force journal replay.
+    //
     // Any required data ops will be completed before we start updating the metadata.  That
     // way if there's a crash there will be nothing to unroll, other than allocations which
     // can be left to the garbage collector.
@@ -648,42 +651,34 @@ impl Pool {
         j.batch(|| {
             let mut ops = Ops::default();
 
-            // Provision unmapped areas
             let mut current = thin_begin;
-            let mut provisioned = Vec::new();
+            let mut result = Vec::new();
             for (vbegin, m) in &ms {
                 if current < *vbegin {
-                    // Provision new mappings for the gap
-                    let new_mappings = self.provision(current, *vbegin, &mut ops)?;
-                    provisioned.extend(&new_mappings);
+                    // provision the gap before m
+                    result.extend(&self.provision(current, *vbegin, &mut ops)?);
                 }
-                provisioned.push((*vbegin, *m));
+
+                if Self::should_break_sharing(&info, m) {
+                    // break sharing
+                    let len = m.e - m.b;
+                    result.extend(&self.break_sharing(*vbegin, *vbegin + len, &mut ops)?);
+                } else {
+                    // use existing mapping
+                    result.push((*vbegin, *m));
+                }
                 current = m.e;
             }
 
-            // There may be an unprovisioned area between the final mapping and the end of the
-            // range.
             if current < thin_end {
-                let new_mappings = self.provision(current, thin_end, &mut ops)?;
-                provisioned.extend(&new_mappings);
-            }
-
-            // Break sharing if needed
-            let mut final_provisioned: Vec<(VBlock, Mapping)> = Vec::new();
-            for (vbegin, m) in provisioned.iter() {
-                if Self::should_break_sharing(&info, m) {
-                    let len = m.e - m.b;
-                    let new_mappings = self.break_sharing(*vbegin, *vbegin + len, &mut ops)?;
-                    final_provisioned.extend(&new_mappings);
-                } else {
-                    final_provisioned.push((*vbegin, *m));
-                }
+                // provision the gap at the end of the range
+                result.extend(&self.provision(current, thin_end, &mut ops)?);
             }
 
             self.exec_ops(&mut mappings, &ops)?;
             self.update_mappings_root(id, &mut info, &mappings)?;
 
-            Ok(final_provisioned)
+            Ok(result)
         })
     }
 

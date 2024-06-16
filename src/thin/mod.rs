@@ -382,23 +382,15 @@ impl Pool {
 
     pub fn create_snap(&mut self, origin: ThinID) -> Result<ThinID> {
         self.journaller().batch(|| {
-            // Get the mapping tree and info for the origin thin device
             let (mut origin_info, mut origin_mappings) = self.get_mapping_tree(origin)?;
-
-            // Create a snapshot of the origin mapping tree
             let snap_mappings = origin_mappings.snap(self.snap_time);
 
-            // Choose a new id for the snapshot
             let snap_id = self.new_thin_id();
-
-            // Create a new ThinInfo for the snapshot
             let snap_info = ThinInfo {
                 size: origin_info.size,
                 snap_time: self.snap_time,
                 root: snap_mappings.root(),
             };
-
-            // Insert the new ThinInfo for the snapshot into the infos BTree
             self.infos.insert(snap_id, &snap_info)?;
 
             // Update the snap_time in the ThinInfo for the origin thin device

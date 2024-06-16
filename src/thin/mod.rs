@@ -690,6 +690,13 @@ impl Pool {
             self.update_mappings_root(id, &mut info, &mappings)
         })
     }
+
+    //---------------------
+
+    fn flush(&mut self, id: ThinID) -> Result<()> {
+        // find the latest cache pinning id and wait for it to hit the disk
+        todo!();
+    }
 }
 
 //-------------------------------------------------------------------------

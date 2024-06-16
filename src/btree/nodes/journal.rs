@@ -3,8 +3,9 @@ use std::sync::{Arc, Mutex};
 
 use crate::block_cache::MetadataBlock;
 use crate::btree::node::*;
+use crate::btree::node_cache::*;
 use crate::byte_types::*;
-use crate::journal::*;
+use crate::journal::Entry;
 use crate::packed_array::*;
 
 //-------------------------------------------------------------------------
@@ -26,16 +27,16 @@ fn to_bytes_many<V: Serializable>(values: &[V]) -> Bytes {
 //-------------------------------------------------------------------------
 
 pub struct JournalNode<N, V, Data> {
-    journal: Arc<Mutex<Journal>>,
+    cache: Arc<Mutex<NodeCache>>,
     node: N,
     phantom_v: std::marker::PhantomData<V>,
     phantom_data: std::marker::PhantomData<Data>,
 }
 
 impl<N, V, Data> JournalNode<N, V, Data> {
-    pub fn new(journal: Arc<Mutex<Journal>>, node: N) -> Self {
+    pub fn new(cache: Arc<Mutex<NodeCache>>, node: N) -> Self {
         Self {
-            journal,
+            cache,
             node,
             phantom_v: std::marker::PhantomData,
             phantom_data: std::marker::PhantomData,
@@ -52,7 +53,7 @@ where
     // FIXME: I'd like to return  Result<()> from here, but most of the node ops
     // are assumed to be unable to fail.  Revisit.
     pub fn add_op(&mut self, op: Entry) {
-        self.journal.lock().unwrap().add_op(op).unwrap()
+        self.cache.lock().unwrap().add_journal_op(op).unwrap()
     }
 }
 

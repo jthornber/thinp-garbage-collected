@@ -1,7 +1,7 @@
 use anyhow::{anyhow, Result};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use num_enum::TryFromPrimitive;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, VecDeque};
 use std::convert::TryFrom;
 use std::io::{Read, Write};
 use std::path::Path;
@@ -404,9 +404,20 @@ fn format_op(entry: &Entry) -> String {
 
 //-------------------------------------------------------------------------
 
+/// Call backs made when a batch of entries have all hit the disk.
+// This could be just a FnOnce, but I suspect we'll add other methods in here.
+pub trait BatchCompletion {
+    fn complete(&self);
+}
+
+pub struct Batch {
+    pub ops: Vec<Entry>,
+    pub completion: Option<Box<dyn BatchCompletion>>,
+}
+
 pub struct Journal {
     slab: SlabFile,
-    ops: Vec<Entry>,
+    batches: Vec<Batch>,
     seqs: BTreeMap<MetadataBlock, SequenceNr>,
 }
 
@@ -416,8 +427,6 @@ impl Drop for Journal {
         self.slab.close();
     }
 }
-
-type NotifyFn = Box<dyn FnOnce()>;
 
 impl Journal {
     pub fn create<P: AsRef<Path>>(path: P) -> Result<Self> {
@@ -431,7 +440,7 @@ impl Journal {
 
         Ok(Self {
             slab,
-            ops: Vec::with_capacity(128),
+            batches: Vec::new(),
             seqs: BTreeMap::new(),
         })
     }
@@ -446,37 +455,38 @@ impl Journal {
 
         Ok(Self {
             slab,
-            ops: Vec::with_capacity(128),
+            batches: Vec::new(),
             seqs: BTreeMap::new(),
         })
     }
 
-    /// Node ptr refers to the node before the op, after the op
-    /// the seq_nr will be one higher.
-    pub fn add_op(&mut self, op: Entry) -> Result<()> {
-        self.ops.push(op);
-        Ok(())
-    }
-
-    /// The callback will be made once all ops prior to this call have been
-    /// persisted to disk.  Used to ensure the journal is written before
-    /// btree nodes.
-    pub fn add_barrier(&mut self, callback: NotifyFn) -> Result<()> {
-        todo!()
+    pub fn add_batch(&mut self, batch: Batch) {
+        self.batches.push(batch)
     }
 
     pub fn sync(&mut self) -> Result<()> {
         // hack
-        if self.ops.is_empty() {
+        if self.batches.is_empty() {
             return Ok(());
         }
 
+        let mut batches: Vec<Batch> = Vec::new();
+
+        std::mem::swap(&mut batches, &mut self.batches);
+
         let mut w: Vec<u8> = Vec::new();
+        for b in &batches {
+            pack_ops(&mut w, &b.ops)?;
+        }
 
-        pack_ops(&mut w, &self.ops)?;
-        self.ops.clear();
-
+        // FIXME: use rio
         self.slab.write_slab(&w)?;
+
+        for b in batches {
+            if let Some(completion) = b.completion {
+                completion.complete();
+            }
+        }
 
         Ok(())
     }

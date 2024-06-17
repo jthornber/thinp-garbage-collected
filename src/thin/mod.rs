@@ -517,7 +517,7 @@ impl Pool {
         self.copier.exec(&data_ops)?;
 
         for (b, e) in ops.removes() {
-            self.discard_(mappings, *b, *e)?;
+            mappings.remove_range(*b, *e)?;
         }
 
         for (vbegin, m) in ops.inserts() {
@@ -578,20 +578,10 @@ impl Pool {
 
     //---------------------
 
-    fn discard_(
-        &mut self,
-        mappings: &mut MappingTree,
-        thin_begin: VBlock,
-        thin_end: VBlock,
-    ) -> Result<()> {
-        mappings.remove_range(thin_begin, thin_end)?;
-        Ok(())
-    }
-
     pub fn discard(&mut self, id: ThinID, thin_begin: VBlock, thin_end: VBlock) -> Result<()> {
         self.journaller().batch(|| {
             let (mut info, mut mappings) = self.get_mapping_tree(id)?;
-            self.discard_(&mut mappings, thin_begin, thin_end)?;
+            mappings.remove_range(thin_begin, thin_end)?;
             self.update_mappings_root(id, &mut info, &mappings)
         })
     }

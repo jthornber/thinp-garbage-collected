@@ -14,6 +14,7 @@ use crate::block_cache::*;
 use crate::btree::node::*;
 use crate::btree::node_cache::*;
 use crate::btree::nodes::simple::*;
+use crate::btree::split::Split;
 use crate::btree::BTree;
 use crate::btree::*;
 use crate::copier::fake::*;
@@ -38,22 +39,22 @@ impl Mapping {
     pub fn len(&self) -> PBlock {
         self.e - self.b
     }
+}
 
-    // selects the part of a mapping that is above key_begin
-    pub fn select_above(key_begin: Key, k: Key, m: Mapping) -> Option<(Key, Mapping)> {
-        eprintln!("select_above({}, {}, {:?}", key_begin, k, m);
-        let len = m.e - m.b;
-        if k + len > key_begin {
-            if k >= key_begin {
-                Some((k, m))
+impl Split for Mapping {
+    fn select_geq(&self, k_old: Key, k_new: Key) -> Option<(Key, Self)> {
+        let len = self.e - self.b;
+        if k_old + len > k_new {
+            if k_old >= k_new {
+                Some((k_old, self.clone()))
             } else {
-                let delta = key_begin - k;
+                let delta = k_new - k_old;
                 Some((
-                    key_begin,
+                    k_new,
                     Mapping {
-                        b: m.b + delta,
-                        e: m.e,
-                        snap_time: m.snap_time,
+                        b: self.b + delta,
+                        e: self.e,
+                        snap_time: self.snap_time,
                     },
                 ))
             }
@@ -62,15 +63,14 @@ impl Mapping {
         }
     }
 
-    // selects the part of a mapping that is below key_end
-    pub fn select_below(key_end: Key, k: Key, m: Mapping) -> Option<(Key, Mapping)> {
-        if k < key_end {
+    fn select_lt(&self, k_old: Key, k_new: Key) -> Option<(Key, Self)> {
+        if k_old < k_new {
             Some((
-                k,
+                k_old,
                 Mapping {
-                    b: m.b,
-                    e: m.e.min(key_end),
-                    snap_time: m.snap_time,
+                    b: self.b,
+                    e: self.e.min(k_new),
+                    snap_time: self.snap_time,
                 },
             ))
         } else {
@@ -140,7 +140,7 @@ mod tests {
         ];
 
         for t in tests {
-            let r = Mapping::select_above(t.1, t.0.b, t.0);
+            let r = t.0.select_geq(t.0.b, t.1);
             assert_eq!(r, t.2);
         }
     }
@@ -166,7 +166,7 @@ mod tests {
             (mk_mapping(100, 101), 100, None),
         ];
         for t in tests {
-            let r = Mapping::select_below(t.1, t.0.b, t.0);
+            let r = t.0.select_lt(t.0.b, t.1);
             assert_eq!(r, t.2);
         }
     }

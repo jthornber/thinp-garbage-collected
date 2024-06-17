@@ -5,9 +5,9 @@ use crate::block_cache::*;
 use crate::btree::node::*;
 use crate::btree::node_cache::*;
 use crate::btree::nodes::journal::*;
-use crate::packed_array::*;
-
+use crate::btree::split::Split;
 use crate::btree::BTree;
+use crate::packed_array::*;
 
 //-------------------------------------------------------------------------
 
@@ -119,19 +119,14 @@ fn lt_prog<V: Serializable, N: NodeW<V, ExclusiveProxy>>(node: &N, key: Key) -> 
 }
 
 impl<
-        V: Serializable + Copy,
+        V: Serializable + Copy + Split,
         INodeR: NodeR<NodePtr, SharedProxy>,
         INodeW: NodeW<NodePtr, ExclusiveProxy>,
         LNodeR: NodeR<V, SharedProxy>,
         LNodeW: NodeW<V, ExclusiveProxy>,
     > BTree<V, INodeR, INodeW, LNodeR, LNodeW>
 {
-    fn remove_lt_internal(
-        &mut self,
-        n_ptr: NodePtr,
-        key: Key,
-        split_fn: &ValFn<V>,
-    ) -> Result<NodeResult> {
+    fn remove_lt_internal(&mut self, n_ptr: NodePtr, key: Key) -> Result<NodeResult> {
         use NodeOp::*;
 
         let mut node = self
@@ -147,7 +142,7 @@ impl<
                 }
                 TrimLt(idx) => {
                     let idx = idx - delta;
-                    let res = self.remove_lt_recurse(node.get_value(idx), key, split_fn)?;
+                    let res = self.remove_lt_recurse(node.get_value(idx), key)?;
 
                     // remove_lt cannot cause a Pair result, so we don't need to preserve the result
                     self.node_insert_result(&mut node, idx, &res)?;
@@ -165,12 +160,7 @@ impl<
         Ok(NodeResult::single(&node))
     }
 
-    fn remove_lt_leaf(
-        &mut self,
-        n_ptr: NodePtr,
-        key: Key,
-        split_fn: &ValFn<V>,
-    ) -> Result<NodeResult> {
+    fn remove_lt_leaf(&mut self, n_ptr: NodePtr, key: Key) -> Result<NodeResult> {
         use NodeOp::*;
 
         let mut node = self.cache.shadow::<V, LNodeW>(n_ptr, self.snap_time)?;
@@ -182,7 +172,7 @@ impl<
                 Recurse(_) => {
                     panic!("unexpected recurse");
                 }
-                TrimLt(idx) => match split_fn(node.get_key(idx), node.get_value(idx)) {
+                TrimLt(idx) => match node.get_value(idx).select_geq(node.get_key(idx), key) {
                     None => {
                         node.remove_at(idx);
                     }
@@ -203,31 +193,27 @@ impl<
         Ok(NodeResult::single(&node))
     }
 
-    pub fn remove_lt_recurse(
-        &mut self,
-        n_ptr: NodePtr,
-        key: Key,
-        split_fn: &ValFn<V>,
-    ) -> Result<NodeResult> {
+    pub fn remove_lt_recurse(&mut self, n_ptr: NodePtr, key: Key) -> Result<NodeResult> {
         if self.cache.is_internal(n_ptr)? {
-            self.remove_lt_internal(n_ptr, key, split_fn)
+            self.remove_lt_internal(n_ptr, key)
         } else {
-            self.remove_lt_leaf(n_ptr, key, split_fn)
+            self.remove_lt_leaf(n_ptr, key)
         }
     }
 
-    fn remove_lt_(&mut self, root: NodePtr, key: Key, split_fn: &ValFn<V>) -> Result<NodePtr> {
-        match self.remove_lt_recurse(root, key, split_fn)? {
+    fn remove_lt_(&mut self, root: NodePtr, key: Key) -> Result<NodePtr> {
+        match self.remove_lt_recurse(root, key)? {
             NodeResult::Single(NodeInfo { n_ptr, .. }) => Ok(n_ptr),
             NodeResult::Pair(_, _) => Err(anyhow!("remove_lt increase nr entries somehow")),
         }
     }
 
-    pub fn remove_lt(&mut self, key: Key, val_fn: &ValFn<V>) -> Result<()> {
-        self.root = self.remove_lt_(self.root, key, val_fn)?;
+    pub fn remove_lt(&mut self, key: Key) -> Result<()> {
+        self.root = self.remove_lt_(self.root, key)?;
         Ok(())
     }
 }
+
 //-------------------------------------------------------------------------
 
 fn geq_prog<V: Serializable, N: NodeW<V, ExclusiveProxy>>(node: &N, key: Key) -> NodeProgram {
@@ -257,19 +243,14 @@ fn geq_prog<V: Serializable, N: NodeW<V, ExclusiveProxy>>(node: &N, key: Key) ->
 }
 
 impl<
-        V: Serializable + Copy,
+        V: Serializable + Copy + Split,
         INodeR: NodeR<NodePtr, SharedProxy>,
         INodeW: NodeW<NodePtr, ExclusiveProxy>,
         LNodeR: NodeR<V, SharedProxy>,
         LNodeW: NodeW<V, ExclusiveProxy>,
     > BTree<V, INodeR, INodeW, LNodeR, LNodeW>
 {
-    fn remove_geq_internal(
-        &mut self,
-        n_ptr: NodePtr,
-        key: Key,
-        split_fn: &ValFn<V>,
-    ) -> Result<NodeResult> {
+    fn remove_geq_internal(&mut self, n_ptr: NodePtr, key: Key) -> Result<NodeResult> {
         use NodeOp::*;
 
         let mut node = self
@@ -288,7 +269,7 @@ impl<
                 }
                 TrimGeq(idx) => {
                     let idx = idx - delta;
-                    let res = self.remove_geq_recurse(node.get_value(idx), key, split_fn)?;
+                    let res = self.remove_geq_recurse(node.get_value(idx), key)?;
 
                     // remove_geq cannot cause a Pair result, so this can't split node.
                     self.node_insert_result(&mut node, idx, &res)?;
@@ -303,12 +284,7 @@ impl<
         Ok(NodeResult::single(&node))
     }
 
-    fn remove_geq_leaf(
-        &mut self,
-        n_ptr: NodePtr,
-        key: Key,
-        split_fn: &ValFn<V>,
-    ) -> Result<NodeResult> {
+    fn remove_geq_leaf(&mut self, n_ptr: NodePtr, key: Key) -> Result<NodeResult> {
         use NodeOp::*;
 
         let mut node = self.cache.shadow::<V, LNodeW>(n_ptr, self.snap_time)?;
@@ -323,7 +299,7 @@ impl<
                 TrimLt(_) => {
                     panic!("unexpected trim lt");
                 }
-                TrimGeq(idx) => match split_fn(node.get_key(idx), node.get_value(idx)) {
+                TrimGeq(idx) => match node.get_value(idx).select_lt(node.get_key(idx), key) {
                     None => {
                         node.remove_at(idx);
                     }
@@ -341,28 +317,23 @@ impl<
         Ok(NodeResult::single(&node))
     }
 
-    fn remove_geq_recurse(
-        &mut self,
-        n_ptr: NodePtr,
-        key: Key,
-        split_fn: &ValFn<V>,
-    ) -> Result<NodeResult> {
+    fn remove_geq_recurse(&mut self, n_ptr: NodePtr, key: Key) -> Result<NodeResult> {
         if self.cache.is_internal(n_ptr)? {
-            self.remove_geq_internal(n_ptr, key, split_fn)
+            self.remove_geq_internal(n_ptr, key)
         } else {
-            self.remove_geq_leaf(n_ptr, key, split_fn)
+            self.remove_geq_leaf(n_ptr, key)
         }
     }
 
-    fn remove_geq_(&mut self, root: NodePtr, key: Key, split_fn: &ValFn<V>) -> Result<NodePtr> {
-        match self.remove_geq_recurse(root, key, split_fn)? {
+    fn remove_geq_(&mut self, root: NodePtr, key: Key) -> Result<NodePtr> {
+        match self.remove_geq_recurse(root, key)? {
             NodeResult::Single(NodeInfo { n_ptr, .. }) => Ok(n_ptr),
             NodeResult::Pair(_, _) => Err(anyhow!("remove_geq increased nr of entries")),
         }
     }
 
-    pub fn remove_geq(&mut self, key: Key, val_fn: &ValFn<V>) -> Result<()> {
-        self.root = self.remove_geq_(self.root, key, val_fn)?;
+    pub fn remove_geq(&mut self, key: Key) -> Result<()> {
+        self.root = self.remove_geq_(self.root, key)?;
         Ok(())
     }
 }
@@ -452,7 +423,7 @@ fn range_split<V: Serializable, N: NodeW<V, ExclusiveProxy>>(
 }
 
 impl<
-        V: Serializable + Copy,
+        V: Serializable + Copy + Split,
         INodeR: NodeR<NodePtr, SharedProxy>,
         INodeW: NodeW<NodePtr, ExclusiveProxy>,
         LNodeR: NodeR<V, SharedProxy>,
@@ -464,8 +435,6 @@ impl<
         n_ptr: NodePtr,
         key_begin: Key,
         key_end: Key,
-        split_lt: &ValFn<V>,
-        split_geq: &ValFn<V>,
     ) -> Result<NodeResult> {
         use NodeOp::*;
 
@@ -480,13 +449,7 @@ impl<
             match op {
                 Recurse(idx) => {
                     assert!(prog_len == 1);
-                    return self.remove_range_recurse(
-                        node.get_value(idx),
-                        key_begin,
-                        key_end,
-                        split_lt,
-                        split_geq,
-                    );
+                    return self.remove_range_recurse(node.get_value(idx), key_begin, key_end);
                 }
 
                 // The rest of the ops are guaranteed to return a Single, so we don't need
@@ -494,12 +457,12 @@ impl<
                 TrimLt(idx) => {
                     let idx = idx - delta;
 
-                    let res = self.remove_lt_recurse(node.get_value(idx), key_end, split_lt)?;
+                    let res = self.remove_lt_recurse(node.get_value(idx), key_end)?;
                     self.node_insert_result(&mut node, idx, &res)?;
                 }
                 TrimGeq(idx) => {
                     let idx = idx - delta;
-                    let res = self.remove_geq_recurse(node.get_value(idx), key_begin, split_geq)?;
+                    let res = self.remove_geq_recurse(node.get_value(idx), key_begin)?;
                     self.node_insert_result(&mut node, idx, &res)?;
                 }
                 Erase(idx_b, idx_e) => {
@@ -516,8 +479,6 @@ impl<
         n_ptr: NodePtr,
         key_begin: Key,
         key_end: Key,
-        split_lt: &ValFn<V>,
-        split_geq: &ValFn<V>,
     ) -> Result<NodeResult> {
         use NodeOp::*;
 
@@ -535,7 +496,7 @@ impl<
                     // So we'll have to split it in two.
                     let k = node.get_key(idx);
                     let v = node.get_value(idx);
-                    match (split_geq(k, v), split_lt(k, v)) {
+                    match (v.select_lt(k, key_begin), v.select_geq(k, key_end)) {
                         (None, None) => {
                             node.remove_at(idx);
                             return Ok(NodeResult::single(&node));
@@ -561,7 +522,7 @@ impl<
                 }
                 TrimLt(idx) => {
                     let idx = idx - delta;
-                    match split_lt(node.get_key(idx), node.get_value(idx)) {
+                    match node.get_value(idx).select_geq(node.get_key(idx), key_end) {
                         None => {
                             node.remove_at(idx);
                         }
@@ -572,7 +533,7 @@ impl<
                 }
                 TrimGeq(idx) => {
                     let idx = idx - delta;
-                    match split_geq(node.get_key(idx), node.get_value(idx)) {
+                    match node.get_value(idx).select_lt(node.get_key(idx), key_begin) {
                         None => {
                             node.remove_at(idx);
                         }
@@ -596,13 +557,11 @@ impl<
         n_ptr: NodePtr,
         key_begin: Key,
         key_end: Key,
-        split_lt: &ValFn<V>,
-        split_geq: &ValFn<V>,
     ) -> Result<NodeResult> {
         if self.cache.is_internal(n_ptr)? {
-            self.remove_range_internal(n_ptr, key_begin, key_end, split_lt, split_geq)
+            self.remove_range_internal(n_ptr, key_begin, key_end)
         } else {
-            self.remove_range_leaf(n_ptr, key_begin, key_end, split_lt, split_geq)
+            self.remove_range_leaf(n_ptr, key_begin, key_end)
         }
     }
 
@@ -611,12 +570,10 @@ impl<
         root: NodePtr,
         key_begin: Key,
         key_end: Key,
-        split_lt: &ValFn<V>,
-        split_geq: &ValFn<V>,
     ) -> Result<NodePtr> {
         use NodeResult::*;
 
-        match self.remove_range_recurse(root, key_begin, key_end, split_lt, split_geq)? {
+        match self.remove_range_recurse(root, key_begin, key_end)? {
             Single(NodeInfo { n_ptr, .. }) => Ok(n_ptr),
             Pair(left, right) => {
                 let mut parent: JournalNode<INodeW, NodePtr, ExclusiveProxy> =
@@ -630,14 +587,8 @@ impl<
         }
     }
 
-    pub fn remove_range(
-        &mut self,
-        key_begin: Key,
-        key_end: Key,
-        val_lt: &ValFn<V>,
-        val_geq: &ValFn<V>,
-    ) -> Result<()> {
-        self.root = self.remove_range_(self.root, key_begin, key_end, val_lt, val_geq)?;
+    pub fn remove_range(&mut self, key_begin: Key, key_end: Key) -> Result<()> {
+        self.root = self.remove_range_(self.root, key_begin, key_end)?;
         Ok(())
     }
 }

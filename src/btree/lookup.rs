@@ -3,9 +3,9 @@ use anyhow::Result;
 use crate::block_cache::*;
 use crate::btree::node::*;
 use crate::btree::node_cache::*;
-use crate::packed_array::*;
-
+use crate::btree::split::Split;
 use crate::btree::BTree;
+use crate::packed_array::*;
 
 //-------------------------------------------------------------------------
 
@@ -157,20 +157,14 @@ fn get_prog_below<V: Serializable, N: NodeR<V, SharedProxy>>(node: &N, key: Key)
 }
 
 impl<
-        V: Serializable + Copy,
+        V: Serializable + Copy + Split,
         INodeR: NodeR<NodePtr, SharedProxy>,
         INodeW: NodeW<NodePtr, ExclusiveProxy>,
         LNodeR: NodeR<V, SharedProxy>,
         LNodeW: NodeW<V, ExclusiveProxy>,
     > BTree<V, INodeR, INodeW, LNodeR, LNodeW>
 {
-    fn select_above(
-        &self,
-        n_ptr: NodePtr,
-        key: Key,
-        val_above: &ValFn<V>,
-        results: &mut Vec<(Key, V)>,
-    ) -> Result<()> {
+    fn select_above(&self, n_ptr: NodePtr, key: Key, results: &mut Vec<(Key, V)>) -> Result<()> {
         use NodeOp::*;
 
         if self.cache.is_internal(n_ptr)? {
@@ -182,7 +176,7 @@ impl<
                         unreachable!();
                     }
                     Above(idx) => {
-                        self.select_above(node.get_value(idx), key, val_above, results)?;
+                        self.select_above(node.get_value(idx), key, results)?;
                     }
                     All(idx) => {
                         self.select_all(node.get_value(idx), results)?;
@@ -200,7 +194,9 @@ impl<
                         unreachable!();
                     }
                     Above(idx) => {
-                        if let Some((nk, nv)) = val_above(key, node.get_value(idx)) {
+                        if let Some((nk, nv)) =
+                            node.get_value(idx).select_geq(node.get_key(idx), key)
+                        {
                             results.push((nk, nv));
                         }
                     }
@@ -214,13 +210,7 @@ impl<
         Ok(())
     }
 
-    fn select_below(
-        &self,
-        n_ptr: NodePtr,
-        key: Key,
-        val_below: &ValFn<V>,
-        results: &mut Vec<(Key, V)>,
-    ) -> Result<()> {
+    fn select_below(&self, n_ptr: NodePtr, key: Key, results: &mut Vec<(Key, V)>) -> Result<()> {
         use NodeOp::*;
 
         if self.cache.is_internal(n_ptr)? {
@@ -232,7 +222,7 @@ impl<
                         unreachable!();
                     }
                     Below(idx) => {
-                        self.select_below(node.get_value(idx), key, val_below, results)?;
+                        self.select_below(node.get_value(idx), key, results)?;
                     }
                     All(idx) => {
                         self.select_all(node.get_value(idx), results)?;
@@ -250,7 +240,9 @@ impl<
                         unreachable!();
                     }
                     Below(idx) => {
-                        if let Some((nk, nv)) = val_below(key, node.get_value(idx)) {
+                        if let Some((nk, nv)) =
+                            node.get_value(idx).select_lt(node.get_key(idx), key)
+                        {
                             results.push((nk, nv));
                         }
                     }
@@ -284,8 +276,6 @@ impl<
         n_ptr: NodePtr,
         key_begin: Key,
         key_end: Key,
-        val_below: &ValFn<V>,
-        val_above: &ValFn<V>,
         results: &mut Vec<(Key, V)>,
     ) -> Result<()> {
         use NodeOp::*;
@@ -295,20 +285,13 @@ impl<
             for op in get_prog(&node, key_begin, key_end) {
                 match op {
                     AboveAndBelow(idx) => {
-                        self.select_above_below(
-                            node.get_value(idx),
-                            key_begin,
-                            key_end,
-                            val_below,
-                            val_above,
-                            results,
-                        )?;
+                        self.select_above_below(node.get_value(idx), key_begin, key_end, results)?;
                     }
                     Above(idx) => {
-                        self.select_above(node.get_value(idx), key_begin, val_above, results)?;
+                        self.select_above(node.get_value(idx), key_begin, results)?;
                     }
                     Below(idx) => {
-                        self.select_below(node.get_value(idx), key_end, val_below, results)?;
+                        self.select_below(node.get_value(idx), key_end, results)?;
                     }
                     All(idx) => {
                         self.select_all(node.get_value(idx), results)?;
@@ -321,19 +304,25 @@ impl<
                 match op {
                     AboveAndBelow(idx) => {
                         // we need to use both trim functions
-                        if let Some((nk, nv)) = val_above(node.get_key(idx), node.get_value(idx)) {
-                            if let Some((nk, nv)) = val_below(nk, nv) {
+                        if let Some((nk, nv)) =
+                            node.get_value(idx).select_geq(node.get_key(idx), key_begin)
+                        {
+                            if let Some((nk, nv)) = nv.select_lt(nk, key_end) {
                                 results.push((nk, nv));
                             }
                         }
                     }
                     Above(idx) => {
-                        if let Some((nk, nv)) = val_above(node.get_key(idx), node.get_value(idx)) {
+                        if let Some((nk, nv)) =
+                            node.get_value(idx).select_geq(node.get_key(idx), key_begin)
+                        {
                             results.push((nk, nv));
                         }
                     }
                     Below(idx) => {
-                        if let Some((nk, nv)) = val_below(node.get_key(idx), node.get_value(idx)) {
+                        if let Some((nk, nv)) =
+                            node.get_value(idx).select_lt(node.get_key(idx), key_end)
+                        {
                             results.push((nk, nv));
                         }
                     }
@@ -348,24 +337,11 @@ impl<
     }
 
     /// Returns a vec of key, value pairs
-    pub fn lookup_range(
-        &self,
-        key_begin: Key,
-        key_end: Key,
-        select_above: &ValFn<V>,
-        select_below: &ValFn<V>,
-    ) -> Result<Vec<(Key, V)>> {
+    pub fn lookup_range(&self, key_begin: Key, key_end: Key) -> Result<Vec<(Key, V)>> {
         let mut results = Vec::with_capacity(16);
 
         // FIXME: order of select_* params changes?
-        self.select_above_below(
-            self.root,
-            key_begin,
-            key_end,
-            select_above,
-            select_below,
-            &mut results,
-        )?;
+        self.select_above_below(self.root, key_begin, key_end, &mut results)?;
 
         Ok(results)
     }

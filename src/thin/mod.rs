@@ -386,18 +386,15 @@ impl Pool {
         Ok((info, mappings))
     }
 
+    /*
     fn lookup_range(
         mappings: &MappingTree,
         thin_begin: VBlock,
         thin_end: VBlock,
     ) -> Result<Vec<(VBlock, Mapping)>> {
-        let select_above =
-            mk_val_fn(move |k: Key, m: Mapping| Mapping::select_above(thin_begin, k, m));
-        let select_below =
-            mk_val_fn(move |k: Key, m: Mapping| Mapping::select_below(thin_end, k, m));
-
-        mappings.lookup_range(thin_begin, thin_end, &select_above, &select_below)
+        mappings.lookup_range(thin_begin, thin_end)
     }
+    */
 
     pub fn get_read_mapping(
         &self,
@@ -406,7 +403,7 @@ impl Pool {
         thin_end: VBlock,
     ) -> Result<Vec<(VBlock, Mapping)>> {
         let (_, mappings) = self.get_mapping_tree(id)?;
-        Self::lookup_range(&mappings, thin_begin, thin_end)
+        mappings.lookup_range(thin_begin, thin_end)
     }
 
     //---------------------
@@ -537,7 +534,7 @@ impl Pool {
         thin_end: VBlock,
     ) -> Result<Vec<(VBlock, Mapping)>> {
         let (mut info, mut mappings) = self.get_mapping_tree(id)?;
-        let mappings_in_range = Self::lookup_range(&mappings, thin_begin, thin_end)?;
+        let mappings_in_range = mappings.lookup_range(thin_begin, thin_end)?;
 
         self.journaller().batch(|| {
             let mut ops = Ops::default();
@@ -587,12 +584,7 @@ impl Pool {
         thin_begin: VBlock,
         thin_end: VBlock,
     ) -> Result<()> {
-        let select_above =
-            mk_val_fn(move |k: Key, m: Mapping| Mapping::select_above(thin_begin, k, m));
-        let select_below =
-            mk_val_fn(move |k: Key, m: Mapping| Mapping::select_below(thin_end, k, m));
-
-        mappings.remove_range(thin_begin, thin_end, &select_below, &select_above)?;
+        mappings.remove_range(thin_begin, thin_end)?;
         Ok(())
     }
 

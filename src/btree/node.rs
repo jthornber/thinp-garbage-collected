@@ -180,16 +180,3 @@ pub trait NodeW<V: Serializable, Data: Writeable>: NodeR<V, Data> {
 }
 
 //-------------------------------------------------------------------------
-
-pub type ValFn<'a, V> = Box<dyn Fn(Key, V) -> Option<(Key, V)> + 'a>;
-
-#[allow(dead_code)]
-pub fn mk_val_fn<'a, V, F>(f: F) -> ValFn<'a, V>
-where
-    V: Serializable,
-    F: Fn(Key, V) -> Option<(Key, V)> + 'a,
-{
-    Box::new(f)
-}
-
-//-------------------------------------------------------------------------

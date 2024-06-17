@@ -9,15 +9,12 @@ use crate::packed_array::*;
 
 //-------------------------------------------------------------------------
 
-pub type ValFn<'a, V> = Box<dyn Fn(Key, V) -> Option<(Key, V)> + 'a>;
-
-#[allow(dead_code)]
-pub fn mk_val_fn<'a, V, F>(f: F) -> ValFn<'a, V>
+pub trait Split
 where
-    V: Serializable,
-    F: Fn(Key, V) -> Option<(Key, V)> + 'a,
+    Self: Sized,
 {
-    Box::new(f)
+    fn select_geq(&self, k_old: Key, k_new: Key) -> Option<(Key, Self)>;
+    fn select_lt(&self, k_old: Key, k_new: Key) -> Option<(Key, Self)>;
 }
 
 //-------------------------------------------------------------------------

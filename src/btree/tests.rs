@@ -16,6 +16,7 @@ mod test {
     use crate::btree::node::*;
     use crate::btree::node_cache::*;
     use crate::btree::nodes::simple::*;
+    use crate::btree::split::Split;
     use crate::btree::BTree;
     use crate::core::*;
     use crate::journal::*;
@@ -30,6 +31,36 @@ mod test {
     struct Value {
         v: u64,
         len: u64,
+    }
+
+    impl Split for Value {
+        fn select_geq(&self, k_old: Key, k_new: Key) -> Option<(Key, Self)> {
+            if k_old < k_new && k_old + self.len >= k_new {
+                Some((
+                    k_new,
+                    Value {
+                        v: self.v,
+                        len: (k_old + self.len) - k_new,
+                    },
+                ))
+            } else {
+                Some((k_old, self.clone()))
+            }
+        }
+
+        fn select_lt(&self, k_old: Key, k_new: Key) -> Option<(Key, Self)> {
+            if k_old + self.len > k_new {
+                Some((
+                    k_old,
+                    Value {
+                        v: self.v,
+                        len: k_new - k_old,
+                    },
+                ))
+            } else {
+                Some((k_old, self.clone()))
+            }
+        }
     }
 
     impl Serializable for Value {
@@ -299,9 +330,7 @@ mod test {
         let mut fix = Fixture::new(1024, 102400)?;
         fix.commit()?;
 
-        let no_split = |k: Key, v: Value| Some((k, v));
-
-        fix.tree.remove_geq(100, &mk_val_fn(no_split))?;
+        fix.tree.remove_geq(100)?;
         ensure!(fix.tree.check()? == 0);
         Ok(())
     }
@@ -313,7 +342,7 @@ mod test {
 
         let no_split = |k: Key, v: Value| Some((k, v));
 
-        fix.tree.remove_lt(100, &mk_val_fn(no_split))?;
+        fix.tree.remove_lt(100)?;
         ensure!(fix.tree.check()? == 0);
         Ok(())
     }
@@ -329,8 +358,7 @@ mod test {
     }
 
     fn remove_geq_and_verify(fix: &mut Fixture, cut: Key) -> Result<()> {
-        let no_split = |k: Key, v: Value| Some((k, v));
-        fix.tree.remove_geq(cut, &mk_val_fn(no_split))?;
+        fix.tree.remove_geq(cut)?;
         ensure!(fix.tree.check()? == cut as u64);
 
         // FIXME: use lookup_range() to verify
@@ -350,8 +378,7 @@ mod test {
     }
 
     fn remove_lt_and_verify(fix: &mut Fixture, count: u64, cut: Key) -> Result<()> {
-        let no_split = |k: Key, v: Value| Some((k, v));
-        fix.tree.remove_lt(cut, &mk_val_fn(no_split))?;
+        fix.tree.remove_lt(cut)?;
         ensure!(fix.tree.check()? == count - cut);
 
         // FIXME: use lookup_range() to verify
@@ -426,23 +453,8 @@ mod test {
     fn remove_geq_split() -> Result<()> {
         let mut fix = Fixture::new(1024, 102400)?;
 
-        let cut = 150;
-        let split = |k: Key, v: Value| {
-            if k + v.len > cut {
-                Some((
-                    k,
-                    Value {
-                        v: v.v,
-                        len: cut - k,
-                    },
-                ))
-            } else {
-                Some((k, v))
-            }
-        };
-
         fix.insert(100, &Value { v: 200, len: 100 })?;
-        fix.tree.remove_geq(150, &mk_val_fn(split))?;
+        fix.tree.remove_geq(150)?;
 
         ensure!(fix.tree.check()? == 1);
         ensure!(fix.tree.lookup(100)?.unwrap() == Value { v: 200, len: 50 });
@@ -454,23 +466,8 @@ mod test {
     fn remove_lt_split() -> Result<()> {
         let mut fix = Fixture::new(1024, 102400)?;
 
-        let cut = 150;
-        let split = |k: Key, v: Value| {
-            if k < cut && k + v.len >= cut {
-                Some((
-                    cut,
-                    Value {
-                        v: v.v,
-                        len: ((k + v.len) - cut),
-                    },
-                ))
-            } else {
-                Some((k, v))
-            }
-        };
-
         fix.insert(100, &Value { v: 200, len: 100 })?;
-        fix.tree.remove_lt(150, &mk_val_fn(split))?;
+        fix.tree.remove_lt(150)?;
 
         ensure!(fix.tree.check()? == 1);
         ensure!(fix.tree.lookup(150)?.unwrap() == Value { v: 200, len: 50 });
@@ -484,41 +481,8 @@ mod test {
         let range_begin = 150;
         let range_end = 175;
 
-        let split_low = move |k: Key, v: Value| {
-            if k + v.len > range_begin {
-                Some((
-                    k,
-                    Value {
-                        v: v.v,
-                        len: range_begin - k,
-                    },
-                ))
-            } else {
-                Some((k, v))
-            }
-        };
-
-        let split_high = move |k: Key, v: Value| {
-            if k < range_end && k + v.len >= range_end {
-                Some((
-                    range_end,
-                    Value {
-                        v: v.v,
-                        len: (k + v.len) - range_end,
-                    },
-                ))
-            } else {
-                Some((k, v))
-            }
-        };
-
         fix.insert(100, &Value { v: 200, len: 100 })?;
-        fix.tree.remove_range(
-            range_begin,
-            range_end,
-            &mk_val_fn(split_high),
-            &mk_val_fn(split_low),
-        )?;
+        fix.tree.remove_range(range_begin, range_end)?;
 
         ensure!(fix.tree.check()? == 2);
         ensure!(fix.tree.lookup(100)?.unwrap() == Value { v: 200, len: 50 });
@@ -540,40 +504,7 @@ mod test {
         let range_begin = 1001;
         let range_end = 2005;
 
-        let split_low = |k: Key, v: Value| {
-            if k + v.len > range_begin {
-                Some((
-                    k,
-                    Value {
-                        v: v.v,
-                        len: range_begin - k,
-                    },
-                ))
-            } else {
-                Some((k, v))
-            }
-        };
-
-        let split_high = |k: Key, v: Value| {
-            if k < range_end && k + v.len >= range_end {
-                Some((
-                    range_end,
-                    Value {
-                        v: v.v,
-                        len: (k + v.len) - range_end,
-                    },
-                ))
-            } else {
-                Some((k, v))
-            }
-        };
-
-        fix.tree.remove_range(
-            range_begin,
-            range_end,
-            &mk_val_fn(split_low),
-            &mk_val_fn(split_high),
-        )?;
+        fix.tree.remove_range(range_begin, range_end)?;
         // fix.tree.remove_lt(range_end, split_high)?;
 
         // FIXME: use lookup_range() to verify

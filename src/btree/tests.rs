@@ -16,7 +16,7 @@ mod test {
     use crate::btree::node::*;
     use crate::btree::node_cache::*;
     use crate::btree::nodes::simple::*;
-    use crate::btree::split::Split;
+    use crate::btree::range_value::RangeValue;
     use crate::btree::BTree;
     use crate::core::*;
     use crate::journal::*;
@@ -33,7 +33,7 @@ mod test {
         len: u64,
     }
 
-    impl Split for Value {
+    impl RangeValue for Value {
         fn select_geq(&self, k_old: Key, k_new: Key) -> Option<(Key, Self)> {
             if k_old < k_new && k_old + self.len >= k_new {
                 Some((

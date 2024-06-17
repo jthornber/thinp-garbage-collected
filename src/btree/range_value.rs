@@ -9,7 +9,7 @@ use crate::packed_array::*;
 
 //-------------------------------------------------------------------------
 
-pub trait Split
+pub trait RangeValue
 where
     Self: Sized,
 {

@@ -14,7 +14,7 @@ use crate::block_cache::*;
 use crate::btree::node::*;
 use crate::btree::node_cache::*;
 use crate::btree::nodes::simple::*;
-use crate::btree::split::Split;
+use crate::btree::range_value::RangeValue;
 use crate::btree::BTree;
 use crate::btree::*;
 use crate::copier::fake::*;
@@ -41,7 +41,7 @@ impl Mapping {
     }
 }
 
-impl Split for Mapping {
+impl RangeValue for Mapping {
     fn select_geq(&self, k_old: Key, k_new: Key) -> Option<(Key, Self)> {
         let len = self.e - self.b;
         if k_old + len > k_new {

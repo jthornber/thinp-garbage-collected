@@ -5,7 +5,7 @@ use crate::block_cache::*;
 use crate::btree::node::*;
 use crate::btree::node_cache::*;
 use crate::btree::nodes::journal::*;
-use crate::btree::split::Split;
+use crate::btree::range_value::RangeValue;
 use crate::btree::BTree;
 use crate::packed_array::*;
 
@@ -119,7 +119,7 @@ fn lt_prog<V: Serializable, N: NodeW<V, ExclusiveProxy>>(node: &N, key: Key) -> 
 }
 
 impl<
-        V: Serializable + Copy + Split,
+        V: Serializable + Copy + RangeValue,
         INodeR: NodeR<NodePtr, SharedProxy>,
         INodeW: NodeW<NodePtr, ExclusiveProxy>,
         LNodeR: NodeR<V, SharedProxy>,
@@ -243,7 +243,7 @@ fn geq_prog<V: Serializable, N: NodeW<V, ExclusiveProxy>>(node: &N, key: Key) ->
 }
 
 impl<
-        V: Serializable + Copy + Split,
+        V: Serializable + Copy + RangeValue,
         INodeR: NodeR<NodePtr, SharedProxy>,
         INodeW: NodeW<NodePtr, ExclusiveProxy>,
         LNodeR: NodeR<V, SharedProxy>,
@@ -423,7 +423,7 @@ fn range_split<V: Serializable, N: NodeW<V, ExclusiveProxy>>(
 }
 
 impl<
-        V: Serializable + Copy + Split,
+        V: Serializable + Copy + RangeValue,
         INodeR: NodeR<NodePtr, SharedProxy>,
         INodeW: NodeW<NodePtr, ExclusiveProxy>,
         LNodeR: NodeR<V, SharedProxy>,

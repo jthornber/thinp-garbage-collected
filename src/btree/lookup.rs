@@ -3,7 +3,7 @@ use anyhow::Result;
 use crate::block_cache::*;
 use crate::btree::node::*;
 use crate::btree::node_cache::*;
-use crate::btree::split::Split;
+use crate::btree::range_value::RangeValue;
 use crate::btree::BTree;
 use crate::packed_array::*;
 
@@ -157,7 +157,7 @@ fn get_prog_below<V: Serializable, N: NodeR<V, SharedProxy>>(node: &N, key: Key)
 }
 
 impl<
-        V: Serializable + Copy + Split,
+        V: Serializable + Copy + RangeValue,
         INodeR: NodeR<NodePtr, SharedProxy>,
         INodeW: NodeW<NodePtr, ExclusiveProxy>,
         LNodeR: NodeR<V, SharedProxy>,

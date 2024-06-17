@@ -55,8 +55,8 @@ mod lookup;
 pub mod node;
 pub mod node_cache;
 pub mod nodes;
+pub mod range_value;
 mod remove;
-pub mod split;
 mod tests;
 
 //-------------------------------------------------------------------------

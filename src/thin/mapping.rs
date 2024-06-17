@@ -77,6 +77,18 @@ impl RangeValue for Mapping {
             None
         }
     }
+
+    fn merge(&self, rhs: &Self) -> Option<Self> {
+        if self.e == rhs.b && self.snap_time == rhs.snap_time {
+            Some(Mapping {
+                b: self.b,
+                e: rhs.e,
+                snap_time: self.snap_time,
+            })
+        } else {
+            None
+        }
+    }
 }
 
 impl Serializable for Mapping {

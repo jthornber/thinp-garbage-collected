@@ -61,6 +61,10 @@ mod test {
                 Some((k_old, self.clone()))
             }
         }
+
+        fn merge(&self, rhs: &Self) -> Option<Self> {
+            None
+        }
     }
 
     impl Serializable for Value {

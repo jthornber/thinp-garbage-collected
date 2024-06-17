@@ -15,6 +15,7 @@ where
 {
     fn select_geq(&self, k_old: Key, k_new: Key) -> Option<(Key, Self)>;
     fn select_lt(&self, k_old: Key, k_new: Key) -> Option<(Key, Self)>;
+    fn merge(&self, rhs: &Self) -> Option<Self>;
 }
 
 //-------------------------------------------------------------------------

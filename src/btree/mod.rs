@@ -56,6 +56,7 @@ pub mod node;
 pub mod node_cache;
 pub mod nodes;
 mod remove;
+pub mod split;
 mod tests;
 
 //-------------------------------------------------------------------------

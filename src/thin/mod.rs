@@ -635,30 +635,34 @@ impl Pool {
 
         self.journaller().batch(|| {
             let mut ops = Ops::default();
-
             let mut current = thin_begin;
             let mut result = Vec::new();
+
+            // Provisions any gap before the mapping, and breaks sharing if needed.
+            let mut process_mapping = |end: VBlock, m: Option<&Mapping>| -> Result<()> {
+                if current < end {
+                    result.extend(&self.provision(current, end, &mut ops)?);
+                }
+
+                if let Some(m) = m {
+                    if Self::should_break_sharing(&info, m) {
+                        let len = m.e - m.b;
+                        result.extend(&self.break_sharing(end, end + len, &mut ops)?);
+                    } else {
+                        result.push((end, *m));
+                    }
+                }
+
+                current = end;
+                Ok(())
+            };
+
             for (vbegin, m) in &ms {
-                if current < *vbegin {
-                    // provision the gap before m
-                    result.extend(&self.provision(current, *vbegin, &mut ops)?);
-                }
-
-                if Self::should_break_sharing(&info, m) {
-                    // break sharing
-                    let len = m.e - m.b;
-                    result.extend(&self.break_sharing(*vbegin, *vbegin + len, &mut ops)?);
-                } else {
-                    // use existing mapping
-                    result.push((*vbegin, *m));
-                }
-                current = m.e;
+                process_mapping(*vbegin, Some(m))?;
             }
 
-            if current < thin_end {
-                // provision the gap at the end of the range
-                result.extend(&self.provision(current, thin_end, &mut ops)?);
-            }
+            // there may be a trailing gap
+            process_mapping(thin_end, None)?;
 
             self.exec_ops(&mut mappings, &ops)?;
             self.update_mappings_root(id, &mut info, &mappings)?;

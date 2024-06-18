@@ -103,7 +103,7 @@ mod test {
     }
 
     impl Fixture {
-        fn new(nr_metadata_blocks: u32, _nr_data_blocks: u64) -> Result<Self> {
+        fn new(nr_metadata_blocks: u32, nr_data_blocks: u64) -> Result<Self> {
             // We only cope with powers of two atm.
             assert!(nr_metadata_blocks.count_ones() == 1);
 
@@ -114,8 +114,14 @@ mod test {
             let journal = Arc::new(Mutex::new(Journal::create(journal_path)?));
             let engine = mk_engine(nr_metadata_blocks);
             let block_cache = Arc::new(BlockCache::new(engine.clone(), 16)?);
-            let alloc = BuddyAllocator::new(nr_metadata_blocks as u64);
-            let tm = Arc::new(TransactionManager::new(journal.clone(), block_cache, alloc));
+            let metadata_alloc = BuddyAllocator::new(nr_metadata_blocks as u64);
+            let data_alloc = BuddyAllocator::new(nr_data_blocks);
+            let tm = Arc::new(TransactionManager::new(
+                journal.clone(),
+                block_cache,
+                metadata_alloc,
+                data_alloc,
+            ));
             let tree = BTree::empty_tree(tm.clone())?;
 
             Ok(Self {

@@ -3,7 +3,7 @@ use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use crate::allocators::journal::*;
-use crate::allocators::*;
+use crate::allocators::{self, *};
 use crate::block_cache::*;
 use crate::btree::node::*;
 use crate::btree::nodes::journal::*;
@@ -18,7 +18,8 @@ use crate::packed_array::*;
 // FIXME: is NodeCache the new transaction manager?  Should we rename?
 pub struct TransactionManagerInner {
     journal: Arc<Mutex<Journal>>,
-    alloc: JournalAlloc<BuddyAllocator>,
+    metadata_alloc: Arc<Mutex<dyn Allocator>>,
+    data_alloc: Arc<Mutex<dyn Allocator>>,
     cache: Arc<BlockCache>,
 }
 
@@ -26,13 +27,31 @@ impl TransactionManagerInner {
     pub fn new(
         journal: Arc<Mutex<Journal>>,
         cache: Arc<BlockCache>,
-        alloc: BuddyAllocator,
+        metadata_alloc: BuddyAllocator,
+        data_alloc: BuddyAllocator,
     ) -> Self {
+        let metadata_alloc = Arc::new(Mutex::new(JournalAlloc::new(
+            metadata_alloc,
+            AllocKind::Metadata,
+        )));
+        let data_alloc = Arc::new(Mutex::new(JournalAlloc::new(data_alloc, AllocKind::Data)));
+
         Self {
             journal,
-            alloc: JournalAlloc::new(alloc, AllocKind::Metadata),
+            metadata_alloc,
+            data_alloc,
             cache,
         }
+    }
+
+    pub fn alloc_data(&mut self, len: u64) -> allocators::Result<(u64, Vec<(u64, u64)>)> {
+        let mut alloc = self.data_alloc.lock().unwrap();
+        alloc.alloc_many(len, 0)
+    }
+
+    pub fn free_data(&mut self, b: u64, len: u64) -> allocators::Result<()> {
+        let mut alloc = self.data_alloc.lock().unwrap();
+        alloc.free(b, len)
     }
 
     pub fn is_internal(&mut self, n_ptr: NodePtr) -> Result<bool> {
@@ -58,11 +77,17 @@ impl TransactionManagerInner {
         Ok(JournalNode::new(node))
     }
 
+    fn new_metadata_block(&mut self) -> allocators::Result<MetadataBlock> {
+        let mut alloc = self.metadata_alloc.lock().unwrap();
+        let b = alloc.alloc(1)?;
+        Ok(b as MetadataBlock)
+    }
+
     pub fn new_node<V: Serializable, Node: NodeW<V, ExclusiveProxy>>(
         &mut self,
         is_leaf: bool,
     ) -> Result<JournalNode<Node, V, ExclusiveProxy>> {
-        match self.alloc.alloc(1) {
+        match self.new_metadata_block() {
             Ok(loc) => {
                 let new = self.cache.zero_lock(loc as u32)?;
                 Node::init(loc as u32, new.clone(), is_leaf)?;
@@ -86,7 +111,7 @@ impl TransactionManagerInner {
 
         if snap_time > hdr.snap_time {
             // copy needed
-            if let Ok(loc) = self.alloc.alloc(1) {
+            if let Ok(loc) = self.new_metadata_block() {
                 let mut new = self.cache.zero_lock(loc as u32)?;
                 new.rw()[0..].copy_from_slice(&old.r()[0..]);
                 self.wrap_node(loc as u32, new)
@@ -107,6 +132,7 @@ impl TransactionManagerInner {
 
         match entry {
             AllocMetadata(b, e) => {
+                // FIXME: we need to add alloc_at to the Allocator trait
                 todo!()
             }
             FreeMetadata(b, e) => {
@@ -137,31 +163,33 @@ impl TransactionManagerInner {
                 todo!()
             }
 
-            Entry::Literal(loc, offset, data) => {
+            Literal(loc, offset, data) => {
                 todo!();
-            }
-            Entry::Overwrite(loc, idx, key, value) => {
-                let mut n = self.replay_node(*loc)?;
-                n.apply_overwrite(*idx, *key, &value)?;
             }
 
             Shadow(loc, dest) => {
                 todo!()
             }
-            Overwrite(loc, idx, k, v) => {
-                todo!()
+
+            Overwrite(loc, idx, key, value) => {
+                let mut n = self.replay_node(*loc)?;
+                n.apply_overwrite(*idx, *key, &value)?;
             }
             Insert(loc, idx, k, v) => {
-                todo!()
+                let mut n = self.replay_node(*loc)?;
+                n.apply_insert(*idx, *k, v)?;
             }
             Prepend(loc, ks, vs) => {
-                todo!()
+                let mut n = self.replay_node(*loc)?;
+                n.apply_prepend(ks, &vs)?;
             }
             Append(loc, ks, vs) => {
-                todo!()
+                let mut n = self.replay_node(*loc)?;
+                n.apply_append(ks, &vs)?;
             }
             Erase(loc, idx_b, idx_e) => {
-                todo!()
+                let mut n = self.replay_node(*loc)?;
+                n.apply_erase(*idx_b, *idx_e)?;
             }
         }
 
@@ -189,12 +217,26 @@ impl TransactionManager {
     pub fn new(
         journal: Arc<Mutex<Journal>>,
         cache: Arc<BlockCache>,
-        alloc: BuddyAllocator,
+        metadata_alloc: BuddyAllocator,
+        data_alloc: BuddyAllocator,
     ) -> Self {
         let inner = Arc::new(Mutex::new(TransactionManagerInner::new(
-            journal, cache, alloc,
+            journal,
+            cache,
+            metadata_alloc,
+            data_alloc,
         )));
         Self { inner }
+    }
+
+    pub fn alloc_data(&self, len: u64) -> allocators::Result<(u64, Vec<(u64, u64)>)> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.alloc_data(len)
+    }
+
+    pub fn free_data(&self, b: u64, len: u64) -> allocators::Result<()> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.free_data(b, len)
     }
 
     pub fn is_internal(&self, n_ptr: NodePtr) -> Result<bool> {

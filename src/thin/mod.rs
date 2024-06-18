@@ -168,7 +168,6 @@ pub struct Pool {
     copier: Arc<dyn Copier>,
     journal: Arc<Mutex<Journal>>,
     tm: Arc<TransactionManager>,
-    data_alloc: BuddyAllocator,
 
     infos: InfoTree,
     active_devs: BTreeMap<ThinID, MappingTree>,
@@ -212,6 +211,7 @@ impl Pool {
             journal.clone(),
             block_cache,
             meta_alloc,
+            data_alloc,
         ));
         let journaller = Journaller::new(journal.clone(), tm.clone());
 
@@ -221,7 +221,6 @@ impl Pool {
             copier,
             journal,
             tm,
-            data_alloc,
             infos,
             active_devs: BTreeMap::new(),
             snap_time: 0,
@@ -431,11 +430,11 @@ impl Pool {
     ) -> Result<Vec<(VBlock, Mapping)>> {
         let len = end - begin;
 
-        let (total, runs) = self.data_alloc.alloc_many(len, 0)?;
+        let (total, runs) = self.tm.alloc_data(len)?;
         if total != len {
             // Not enough space, free the allocated data and return an error
             for (b, e) in runs {
-                self.data_alloc.free(b, e - b)?;
+                self.tm.free_data(b, e - b)?;
             }
             return Err(anyhow!("Could not allocate enough data space"));
         }
@@ -472,11 +471,11 @@ impl Pool {
         ops.push_remove(begin, end);
 
         let len = end - begin;
-        let (total, runs) = self.data_alloc.alloc_many(len, 0)?;
+        let (total, runs) = self.tm.alloc_data(len)?;
         if total != len {
             // Not enough space, free the allocated data and return an error
             for (b, e) in runs {
-                self.data_alloc.free(b, e - b)?;
+                self.tm.free_data(b, e - b)?;
             }
             return Err(anyhow!("Could not allocate enough data space"));
         }

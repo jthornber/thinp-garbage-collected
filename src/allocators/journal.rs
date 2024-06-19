@@ -7,6 +7,12 @@ use crate::journal::entry::*;
 
 //-------------------------------------
 
+fn journal_err() -> MemErr {
+    MemErr::Internal("journal error".to_string())
+}
+
+//-------------------------------------
+
 pub enum AllocKind {
     Metadata,
     Data,
@@ -20,6 +26,14 @@ pub struct JournalAlloc<A: Allocator> {
 impl<A: Allocator> JournalAlloc<A> {
     pub fn new(inner: A, kind: AllocKind) -> Self {
         Self { kind, inner }
+    }
+
+    fn add_entry(&self, e: Entry) -> Result<()> {
+        batch::add_entry(e).map_err(|_| journal_err())
+    }
+
+    fn add_entries(&self, es: &[Entry]) -> Result<()> {
+        batch::add_entries(es).map_err(|_| journal_err())
     }
 }
 
@@ -38,18 +52,18 @@ impl<A: Allocator> Allocator for JournalAlloc<A> {
             entries.push(entry);
         }
 
-        batch::add_entries(&entries);
+        self.add_entries(&entries)?;
         Ok((total, runs))
     }
 
     fn alloc(&mut self, nr_blocks: u64) -> Result<u64> {
         let b = self.inner.alloc(nr_blocks)?;
 
-        let op = match self.kind {
+        let e = match self.kind {
             Metadata => Entry::AllocMetadata(b as u32, (b + nr_blocks) as u32),
             Data => Entry::AllocData(b, b + nr_blocks),
         };
-        batch::add_entry(op);
+        self.add_entry(e)?;
 
         Ok(b)
     }
@@ -57,11 +71,11 @@ impl<A: Allocator> Allocator for JournalAlloc<A> {
     fn free(&mut self, block: u64, nr_blocks: u64) -> Result<()> {
         self.inner.free(block, nr_blocks)?;
 
-        let op = match self.kind {
+        let e = match self.kind {
             Metadata => Entry::FreeMetadata(block as u32, (block + nr_blocks) as u32),
             Data => Entry::FreeData(block, block + nr_blocks),
         };
-        batch::add_entry(op);
+        self.add_entry(e)?;
 
         Ok(())
     }
@@ -69,11 +83,11 @@ impl<A: Allocator> Allocator for JournalAlloc<A> {
     fn grow(&mut self, nr_extra_blocks: u64) -> Result<()> {
         self.inner.grow(nr_extra_blocks)?;
 
-        let op = match self.kind {
+        let e = match self.kind {
             Metadata => Entry::GrowMetadata(nr_extra_blocks as u32),
             Data => Entry::GrowData(nr_extra_blocks),
         };
-        batch::add_entry(op);
+        self.add_entry(e)?;
 
         Ok(())
     }

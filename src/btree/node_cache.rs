@@ -7,7 +7,6 @@ use crate::block_cache::*;
 use crate::btree::node::*;
 use crate::btree::nodes::journal::*;
 use crate::byte_types::*;
-use crate::journal::*;
 use crate::packed_array::*;
 
 //-------------------------------------------------------------------------
@@ -16,19 +15,13 @@ use crate::packed_array::*;
 pub struct NodeCacheInner {
     alloc: JournalAlloc<BuddyAllocator>,
     cache: Arc<BlockCache>,
-    journal: Arc<Mutex<Journal>>,
 }
 
 impl NodeCacheInner {
-    pub fn new(
-        cache: Arc<BlockCache>,
-        alloc: BuddyAllocator,
-        journal: Arc<Mutex<Journal>>,
-    ) -> Self {
+    pub fn new(cache: Arc<BlockCache>, alloc: BuddyAllocator) -> Self {
         Self {
             alloc: JournalAlloc::new(alloc, AllocKind::Metadata),
             cache,
-            journal,
         }
     }
 
@@ -100,12 +93,8 @@ pub struct NodeCache {
 }
 
 impl NodeCache {
-    pub fn new(
-        cache: Arc<BlockCache>,
-        alloc: BuddyAllocator,
-        journal: Arc<Mutex<Journal>>,
-    ) -> Self {
-        let inner = Arc::new(Mutex::new(NodeCacheInner::new(cache, alloc, journal)));
+    pub fn new(cache: Arc<BlockCache>, alloc: BuddyAllocator) -> Self {
+        let inner = Arc::new(Mutex::new(NodeCacheInner::new(cache, alloc)));
         Self { inner }
     }
 

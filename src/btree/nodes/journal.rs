@@ -108,14 +108,14 @@ where
     fn overwrite(&mut self, idx: usize, k: Key, value: &V) -> NodeInsertOutcome {
         let loc = self.node.n_ptr().loc;
         let op = Entry::Overwrite(loc, idx as u32, k, to_bytes(value));
-        batch::add_entry(op);
+        batch::add_entry(op).unwrap();
         self.node.overwrite(idx, k, value)
     }
 
     fn insert(&mut self, idx: usize, k: Key, value: &V) -> NodeInsertOutcome {
         let loc = self.node.n_ptr().loc;
         let op = Entry::Insert(loc, idx as u32, k, to_bytes(value));
-        batch::add_entry(op);
+        batch::add_entry(op).unwrap();
         self.node.insert(idx, k, value)
     }
 
@@ -123,7 +123,7 @@ where
         let loc = self.node.n_ptr().loc;
         let serialized_values = values.iter().map(|v| to_bytes(v)).collect();
         let op = Entry::Prepend(loc, keys.to_vec(), serialized_values);
-        batch::add_entry(op);
+        batch::add_entry(op).unwrap();
         self.node.prepend(keys, values)
     }
 
@@ -131,14 +131,14 @@ where
         let loc = self.node.n_ptr().loc;
         let serialized_values = values.iter().map(|v| to_bytes(v)).collect();
         let op = Entry::Append(loc, keys.to_vec(), serialized_values);
-        batch::add_entry(op);
+        batch::add_entry(op).unwrap();
         self.node.append(keys, values)
     }
 
     fn erase(&mut self, b_idx: usize, e_idx: usize) {
         let loc = self.node.n_ptr().loc;
         let op = Entry::Erase(loc, b_idx as u32, e_idx as u32);
-        batch::add_entry(op);
+        batch::add_entry(op).unwrap();
         self.node.erase(b_idx, e_idx)
     }
 }

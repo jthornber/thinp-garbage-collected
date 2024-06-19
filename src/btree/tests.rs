@@ -72,12 +72,15 @@ mod test {
             // We only cope with powers of two atm.
             assert!(nr_metadata_blocks.count_ones() == 1);
 
+            // The batch will be ended in drop()
+            batch::begin_batch()?;
+
             let journal_path = PathBuf::from("./journal.log");
             let journal = Arc::new(Mutex::new(Journal::create(journal_path)?));
             let engine = mk_engine(nr_metadata_blocks);
             let block_cache = Arc::new(BlockCache::new(engine.clone(), 16)?);
             let alloc = BuddyAllocator::new(nr_metadata_blocks as u64);
-            let node_cache = Arc::new(NodeCache::new(block_cache, alloc, journal.clone()));
+            let node_cache = Arc::new(NodeCache::new(block_cache, alloc));
             let tree = BTree::empty_tree(node_cache.clone())?;
 
             Ok(Self {
@@ -89,16 +92,23 @@ mod test {
             })
         }
 
-        fn snap(&mut self) -> Self {
-            self.snap_time += 1;
-            Self {
-                engine: self.engine.clone(),
-                journal: self.journal.clone(),
-                cache: self.cache.clone(),
-                tree: self.tree.snap(self.snap_time),
-                snap_time: self.snap_time,
-            }
-        }
+        /*
+                * snap causes issues with batching
+                fn snap(&mut self) -> Self {
+                    let entries = batch::end_batch();
+                    self.journal.lock().unwrap().add_entries(&entries);
+
+
+                    self.snap_time += 1;
+                    Self {
+                        engine: self.engine.clone(),
+                        journal: self.journal.clone(),
+                        cache: self.cache.clone(),
+                        tree: self.tree.snap(self.snap_time),
+                        snap_time: self.snap_time,
+                    }
+                }
+        */
 
         fn check(&self) -> Result<u64> {
             self.tree.check()
@@ -121,6 +131,17 @@ mod test {
 
             // FIXME: finish
             Ok(())
+        }
+    }
+
+    impl Drop for Fixture {
+        fn drop(&mut self) {
+            let entries = batch::end_batch().unwrap();
+            let batch = Batch {
+                ops: entries,
+                completion: None,
+            };
+            self.journal.lock().unwrap().add_batch(batch);
         }
     }
 

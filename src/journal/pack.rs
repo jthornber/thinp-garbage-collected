@@ -9,38 +9,11 @@ use std::path::Path;
 use crate::block_cache::*;
 use crate::btree::node::Key;
 use crate::btree::*;
+use crate::journal::entry::*;
 use crate::slab::*;
 use crate::types::*;
 
 //-------------------------------------------------------------------------
-
-pub type Bytes = Vec<u8>;
-
-// FIXME: we need to journal ops that are not specific to a node.  eg,
-// allocating a data range.
-/// Operations that can be performed on a node.
-#[derive(Clone, Eq, PartialEq, PartialOrd, Ord)]
-pub enum Entry {
-    AllocMetadata(u32, u32), // begin, end
-    FreeMetadata(u32, u32),  // begin, end
-    GrowMetadata(u32),       // nr_extra_blocks
-
-    AllocData(PBlock, PBlock), // begin, end
-    FreeData(PBlock, PBlock),  // begin, end
-    GrowData(PBlock),          // nr_extra_blocks
-
-    UpdateInfoRoot(NodePtr),
-
-    SetSeq(MetadataBlock, SequenceNr), // Only used when rereading output log
-    Zero(MetadataBlock, usize, usize), // begin, end (including node header)
-    Literal(MetadataBlock, usize, Bytes), // offset, bytes
-    Shadow(MetadataBlock, NodePtr),    // origin
-    Overwrite(MetadataBlock, u32, Key, Bytes), // idx, k, v
-    Insert(MetadataBlock, u32, Key, Bytes), // idx, k, v
-    Prepend(MetadataBlock, Vec<Key>, Vec<Bytes>), // keys, values
-    Append(MetadataBlock, Vec<Key>, Vec<Bytes>), // keys, values
-    Erase(MetadataBlock, u32, u32),    // idx_b, idx_e
-}
 
 #[derive(Eq, PartialEq, TryFromPrimitive)]
 #[repr(u8)]
@@ -331,7 +304,7 @@ fn unpack_op<R: Read>(r: &mut R) -> Result<Entry> {
     }
 }
 
-fn pack_ops<W: Write>(w: &mut W, ops: &[Entry]) -> Result<()> {
+pub fn pack_ops<W: Write>(w: &mut W, ops: &[Entry]) -> Result<()> {
     w.write_u32::<LittleEndian>(ops.len() as u32)?;
     for op in ops {
         pack_op(w, op)?;
@@ -339,7 +312,7 @@ fn pack_ops<W: Write>(w: &mut W, ops: &[Entry]) -> Result<()> {
     Ok(())
 }
 
-fn unpack_ops<R: Read>(r: &mut R) -> Result<Vec<Entry>> {
+pub fn unpack_ops<R: Read>(r: &mut R) -> Result<Vec<Entry>> {
     let nr_ops = r.read_u32::<LittleEndian>()? as usize;
     let mut ops = Vec::with_capacity(nr_ops);
     for _ in 0..nr_ops {
@@ -347,182 +320,6 @@ fn unpack_ops<R: Read>(r: &mut R) -> Result<Vec<Entry>> {
         ops.push(op);
     }
     Ok(ops)
-}
-
-fn to_hex(bytes: &[u8]) -> String {
-    use std::fmt::Write;
-
-    let mut output = "0x".to_string();
-    bytes.iter().fold(output, |mut output, b| {
-        let _ = write!(output, "{b:02x}");
-        output
-    })
-}
-
-fn format_op(entry: &Entry) -> String {
-    use Entry::*;
-    match entry {
-        AllocMetadata(b, e) => format!("alm\t{}..{}", b, e),
-        FreeMetadata(b, e) => format!("frm\t{}..{}", b, e),
-        GrowMetadata(extra) => format!("grm\t{}", extra),
-
-        AllocData(b, e) => format!("ald\t{}..{}", b, e),
-        FreeData(b, e) => format!("frd\t{}..{}", b, e),
-        GrowData(extra) => format!("grd\t{}", extra),
-
-        UpdateInfoRoot(root) => format!("uir {}:{}", root.loc, root.seq_nr),
-
-        SetSeq(loc, seq) => format!("seq\t{} <- {}", loc, seq),
-        Zero(loc, begin, end) => format!("zero\t{}@{}..{}", loc, begin, end),
-        Literal(loc, offset, bytes) => {
-            format!("lit\t {}@{} {}", loc, offset, to_hex(bytes))
-        }
-        Shadow(loc, origin) => format!("shadow\t{:?} -> {:?}", loc, origin),
-        Overwrite(loc, idx, k, v) => {
-            format!("ovr\t {}[{}] <- ({}, {})", loc, idx, k, to_hex(v))
-        }
-        Insert(loc, idx, k, v) => format!("ins\t {}[{}] <- ({}, {})", loc, idx, k, to_hex(v)),
-        Prepend(loc, keys, values) => {
-            format!(
-                "pre\t {} <- ({:?}, {:?})",
-                loc,
-                keys,
-                &values.iter().map(|v| to_hex(v)).collect::<Vec<String>>()
-            )
-        }
-        Append(loc, keys, values) => {
-            format!(
-                "app\t {} <- ({:?}, {:?})",
-                loc,
-                keys,
-                &values.iter().map(|v| to_hex(v)).collect::<Vec<String>>()
-            )
-        }
-        Erase(loc, idx_b, idx_e) => format!("era\t{}[{}..{}]", loc, idx_b, idx_e),
-    }
-}
-
-//-------------------------------------------------------------------------
-
-/// Call backs made when a batch of entries have all hit the disk.
-// This could be just a FnOnce, but I suspect we'll add other methods in here.
-pub trait BatchCompletion {
-    fn complete(&self);
-}
-
-pub struct Batch {
-    pub ops: Vec<Entry>,
-    pub completion: Option<Box<dyn BatchCompletion>>,
-}
-
-pub struct Journal {
-    slab: SlabFile,
-    batches: Vec<Batch>,
-    seqs: BTreeMap<MetadataBlock, SequenceNr>,
-}
-
-impl Drop for Journal {
-    fn drop(&mut self) {
-        self.sync().unwrap();
-        self.slab.close();
-    }
-}
-
-impl Journal {
-    pub fn create<P: AsRef<Path>>(path: P) -> Result<Self> {
-        let slab = SlabFileBuilder::create(path)
-            .read(true)
-            .write(true)
-            .compressed(true)
-            .cache_nr_entries(16)
-            .queue_depth(4)
-            .build()?;
-
-        Ok(Self {
-            slab,
-            batches: Vec::new(),
-            seqs: BTreeMap::new(),
-        })
-    }
-
-    pub fn open<P: AsRef<Path>>(path: P, write: bool) -> Result<Self> {
-        let slab = SlabFileBuilder::open(path)
-            .read(true)
-            .write(write)
-            .cache_nr_entries(16)
-            .queue_depth(4)
-            .build()?;
-
-        Ok(Self {
-            slab,
-            batches: Vec::new(),
-            seqs: BTreeMap::new(),
-        })
-    }
-
-    pub fn add_batch(&mut self, batch: Batch) {
-        self.batches.push(batch)
-    }
-
-    pub fn sync(&mut self) -> Result<()> {
-        // hack
-        if self.batches.is_empty() {
-            return Ok(());
-        }
-
-        let mut batches: Vec<Batch> = Vec::new();
-
-        std::mem::swap(&mut batches, &mut self.batches);
-
-        let mut w: Vec<u8> = Vec::new();
-        for b in &batches {
-            pack_ops(&mut w, &b.ops)?;
-        }
-
-        // FIXME: use rio
-        self.slab.write_slab(&w)?;
-
-        for b in batches {
-            if let Some(completion) = b.completion {
-                completion.complete();
-            }
-        }
-
-        Ok(())
-    }
-
-    pub fn up_to_date(&mut self, n: &NodePtr) -> Result<bool> {
-        if let Some(seq) = self.seqs.get(&n.loc) {
-            if n.seq_nr == *seq {
-                Ok(true)
-            } else {
-                Ok(false)
-            }
-        } else {
-            Err(anyhow!("no sequence nr for {}", n.loc))
-        }
-    }
-
-    pub fn get_ops(
-        &mut self,
-        _loc: MetadataBlock,
-        _seq_old: SequenceNr,
-        _seq_new: SequenceNr,
-    ) -> Result<Vec<Entry>> {
-        todo!()
-    }
-
-    pub fn dump<W: Write>(&mut self, out: &mut W) -> Result<()> {
-        for s in 0..self.slab.get_nr_slabs() {
-            let mut bytes = self.slab.read(s as u32)?;
-            let mut r = std::io::Cursor::new(bytes.as_ref());
-            let ops = unpack_ops(&mut r)?;
-            for op in &ops {
-                writeln!(out, "    {}", format_op(op))?;
-            }
-        }
-        Ok(())
-    }
 }
 
 //-------------------------------------------------------------------------

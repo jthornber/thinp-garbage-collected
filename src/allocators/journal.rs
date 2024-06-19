@@ -2,7 +2,8 @@ use std::sync::{Arc, Mutex};
 
 use crate::allocators::bits::*;
 use crate::allocators::*;
-use crate::journal::{self, Entry, Journal};
+use crate::journal::batch;
+use crate::journal::entry::*;
 
 //-------------------------------------
 
@@ -13,37 +14,12 @@ pub enum AllocKind {
 
 pub struct JournalAlloc<A: Allocator> {
     kind: AllocKind,
-    journal: Arc<Mutex<Journal>>,
     inner: A,
 }
 
 impl<A: Allocator> JournalAlloc<A> {
-    pub fn new(inner: A, journal: Arc<Mutex<Journal>>, kind: AllocKind) -> Self {
-        Self {
-            kind,
-            journal,
-            inner,
-        }
-    }
-
-    fn add_op(&self, entry: Entry) {
-        let batch = journal::Batch {
-            ops: vec![entry],
-            completion: None,
-        };
-
-        let mut journal = self.journal.lock().unwrap();
-        journal.add_batch(batch);
-    }
-
-    fn add_ops(&self, entries: Vec<Entry>) {
-        let batch = journal::Batch {
-            ops: entries,
-            completion: None,
-        };
-
-        let mut journal = self.journal.lock().unwrap();
-        journal.add_batch(batch);
+    pub fn new(inner: A, kind: AllocKind) -> Self {
+        Self { kind, inner }
     }
 }
 
@@ -62,7 +38,7 @@ impl<A: Allocator> Allocator for JournalAlloc<A> {
             entries.push(entry);
         }
 
-        self.add_ops(entries);
+        batch::add_entries(&entries);
         Ok((total, runs))
     }
 
@@ -73,7 +49,7 @@ impl<A: Allocator> Allocator for JournalAlloc<A> {
             Metadata => Entry::AllocMetadata(b as u32, (b + nr_blocks) as u32),
             Data => Entry::AllocData(b, b + nr_blocks),
         };
-        self.add_op(op);
+        batch::add_entry(op);
 
         Ok(b)
     }
@@ -85,7 +61,7 @@ impl<A: Allocator> Allocator for JournalAlloc<A> {
             Metadata => Entry::FreeMetadata(block as u32, (block + nr_blocks) as u32),
             Data => Entry::FreeData(block, block + nr_blocks),
         };
-        self.add_op(op);
+        batch::add_entry(op);
 
         Ok(())
     }
@@ -97,7 +73,7 @@ impl<A: Allocator> Allocator for JournalAlloc<A> {
             Metadata => Entry::GrowMetadata(nr_extra_blocks as u32),
             Data => Entry::GrowData(nr_extra_blocks),
         };
-        self.add_op(op);
+        batch::add_entry(op);
 
         Ok(())
     }

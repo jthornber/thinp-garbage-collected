@@ -26,7 +26,7 @@ impl NodeCacheInner {
         journal: Arc<Mutex<Journal>>,
     ) -> Self {
         Self {
-            alloc: JournalAlloc::new(alloc, journal.clone(), AllocKind::Metadata),
+            alloc: JournalAlloc::new(alloc, AllocKind::Metadata),
             cache,
             journal,
         }
@@ -52,7 +52,7 @@ impl NodeCacheInner {
         data: ExclusiveProxy,
     ) -> Result<JournalNode<Node, V, ExclusiveProxy>> {
         let node = Node::open(loc, data)?;
-        Ok(JournalNode::new(self.journal.clone(), node))
+        Ok(JournalNode::new(node))
     }
 
     pub fn new_node<V: Serializable, Node: NodeW<V, ExclusiveProxy>>(

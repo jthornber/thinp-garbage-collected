@@ -16,6 +16,8 @@ use crate::btree::nodes::simple::*;
 use crate::btree::BTree;
 use crate::btree::*;
 use crate::core::*;
+use crate::journal::batch;
+use crate::journal::entry::*;
 use crate::journal::*;
 use crate::packed_array::*;
 use crate::types::*;
@@ -90,6 +92,23 @@ type MappingTree = BTree<
     SimpleNode<Mapping, SharedProxy>,
     SimpleNode<Mapping, ExclusiveProxy>,
 >;
+
+//-------------------------------------------------------------------------
+
+fn journalled<T, F: FnOnce() -> Result<T>>(journal: Arc<Mutex<Journal>>, action: F) -> Result<T> {
+    batch::begin_batch();
+    let r = action();
+
+    // We need to write the batch to the journal regardless since the node will
+    // have been updated.
+    let b = Batch {
+        ops: batch::end_batch()?,
+        completion: None, // FIXME: use completion from node cache
+    };
+    journal.lock().unwrap().add_batch(b);
+
+    r
+}
 
 //-------------------------------------------------------------------------
 
@@ -174,81 +193,90 @@ impl Pool {
     }
 
     fn update_info_root(&mut self) -> Result<()> {
-        let mut journal = self.journal.lock().unwrap();
-        journal.add_op(Entry::UpdateInfoRoot(self.infos.root()))?;
+        batch::add_entry(Entry::UpdateInfoRoot(self.infos.root()))?;
         Ok(())
     }
 
     pub fn create_thin_(&mut self, size: VBlock) -> Result<(ThinID, MappingTree)> {
-        // Choose a new id
-        let id = self.new_thin_id();
+        journalled(self.journal.clone(), || {
+            // Choose a new id
+            let id = self.new_thin_id();
 
-        // create new btree
-        let mappings = MappingTree::empty_tree(self.cache.clone())?;
+            // create new btree
+            let mappings = MappingTree::empty_tree(self.cache.clone())?;
 
-        Ok((id, mappings))
+            Ok((id, mappings))
+        })
     }
 
     pub fn create_thin(&mut self, size: VBlock) -> Result<ThinID> {
-        let (id, mappings) = self.create_thin_(size)?;
-        // Add thin_info to btree
-        let info = ThinInfo {
-            size,
-            root: mappings.root(),
-        };
-        self.infos.insert(id, &info)?;
-        self.update_info_root()?;
-        Ok(id)
+        journalled(self.journal.clone(), || {
+            let (id, mappings) = self.create_thin_(size)?;
+            // Add thin_info to btree
+            let info = ThinInfo {
+                size,
+                root: mappings.root(),
+            };
+            self.infos.insert(id, &info)?;
+            self.update_info_root()?;
+            Ok(id)
+        })
     }
 
     pub fn create_thick(&mut self, size: VBlock) -> Result<ThinID> {
-        // Create a new thin
-        let (id, mut mappings) = self.create_thin_(size)?;
+        journalled(self.journal.clone(), || {
+            // Create a new thin
+            let (id, mut mappings) = self.create_thin_(size)?;
 
-        // Allocate enough data space to completely map it
-        let (total, runs) = self.data_alloc.alloc_many(size, 0)?;
+            // Allocate enough data space to completely map it
+            let (total, runs) = self.data_alloc.alloc_many(size, 0)?;
 
-        if total != size {
-            // not enough space, free off that data and return error
-            for (b, e) in runs {
-                self.data_alloc.free(b, e - b)?;
+            if total != size {
+                // not enough space, free off that data and return error
+                for (b, e) in runs {
+                    self.data_alloc.free(b, e - b)?;
+                }
+
+                return Err(anyhow!("Could not allocate enough data space"));
             }
 
-            return Err(anyhow!("Could not allocate enough data space"));
-        }
+            // Insert mappings
+            let mut virt_block = 0;
+            for (b, e) in runs {
+                mappings.insert(
+                    virt_block,
+                    &Mapping {
+                        b,
+                        e,
+                        snap_time: self.snap_time,
+                    },
+                )?;
+            }
 
-        // Insert mappings
-        let mut virt_block = 0;
-        for (b, e) in runs {
-            mappings.insert(
-                virt_block,
-                &Mapping {
-                    b,
-                    e,
-                    snap_time: self.snap_time,
-                },
-            )?;
-        }
+            // Add thin_info to btree
+            let info = ThinInfo {
+                size,
+                root: mappings.root(),
+            };
+            self.infos.insert(id, &info)?;
+            self.update_info_root()?;
 
-        // Add thin_info to btree
-        let info = ThinInfo {
-            size,
-            root: mappings.root(),
-        };
-        self.infos.insert(id, &info)?;
-        self.update_info_root()?;
-
-        Ok(id)
+            Ok(id)
+        })
     }
 
     pub fn create_snap(&mut self, _origin: ThinID) -> Result<ThinID> {
-        todo!();
+        journalled(self.journal.clone(), || {
+            todo!();
+        })
     }
 
     pub fn delete_thin(&mut self, dev: ThinID) -> Result<()> {
-        self.infos.remove(dev);
-        self.update_info_root()?;
-        Ok(())
+        journalled(self.journal.clone(), || {
+            self.infos.remove(dev);
+            self.update_info_root()?;
+            Ok(())
+        })
     }
 
     /*
@@ -364,53 +392,59 @@ impl Pool {
         thin_begin: VBlock,
         thin_end: VBlock,
     ) -> Result<Vec<(VBlock, Mapping)>> {
-        let (mut info, mut mappings) = self.get_mapping_tree(id)?;
+        journalled(self.journal.clone(), || {
+            let (mut info, mut mappings) = self.get_mapping_tree(id)?;
 
-        let select_above =
-            mk_val_fn(move |k: Key, m: Mapping| Self::select_above(thin_begin, k, m));
-        let select_below = mk_val_fn(move |k: Key, m: Mapping| Self::select_below(thin_end, k, m));
+            let select_above =
+                mk_val_fn(move |k: Key, m: Mapping| Self::select_above(thin_begin, k, m));
+            let select_below =
+                mk_val_fn(move |k: Key, m: Mapping| Self::select_below(thin_end, k, m));
 
-        let ms = mappings.lookup_range(thin_begin, thin_end, &select_above, &select_below)?;
+            let ms = mappings.lookup_range(thin_begin, thin_end, &select_above, &select_below)?;
 
-        // Provision any gaps
-        let mut current = thin_begin;
-        let mut provisioned: Vec<(VBlock, Mapping)> = Vec::new();
-        for (k, m) in ms.iter() {
-            if current < *k {
-                // Provision new mapping for the gap
-                let new_mapping = self.provision(&mut mappings, current, *k)?;
+            // Provision any gaps
+            let mut current = thin_begin;
+            let mut provisioned: Vec<(VBlock, Mapping)> = Vec::new();
+            for (k, m) in ms.iter() {
+                if current < *k {
+                    // Provision new mapping for the gap
+                    let new_mapping = self.provision(&mut mappings, current, *k)?;
+                    provisioned.push((current, new_mapping));
+                }
+                provisioned.push((*k, *m));
+                current = m.e;
+            }
+
+            if current < thin_end {
+                // Provision new mapping for the remaining gap
+                let new_mapping = self.provision(&mut mappings, current, thin_end)?;
                 provisioned.push((current, new_mapping));
             }
-            provisioned.push((*k, *m));
-            current = m.e;
-        }
 
-        if current < thin_end {
-            // Provision new mapping for the remaining gap
-            let new_mapping = self.provision(&mut mappings, current, thin_end)?;
-            provisioned.push((current, new_mapping));
-        }
-
-        // Break sharing if needed
-        for (k, m) in provisioned.iter_mut() {
-            if Self::should_break_sharing(&info.clone(), m) {
-                *m = self.break_sharing(&mut mappings, *k as VBlock, *m)?;
+            // Break sharing if needed
+            for (k, m) in provisioned.iter_mut() {
+                if Self::should_break_sharing(&info.clone(), m) {
+                    *m = self.break_sharing(&mut mappings, *k as VBlock, *m)?;
+                }
             }
-        }
 
-        self.update_mappings_root(id, &mut info, &mappings)?;
-        Ok(provisioned)
+            self.update_mappings_root(id, &mut info, &mappings)?;
+            Ok(provisioned)
+        })
     }
 
     pub fn discard(&mut self, id: ThinID, thin_begin: VBlock, thin_end: VBlock) -> Result<()> {
-        let (mut info, mut mappings) = self.get_mapping_tree(id)?;
+        journalled(self.journal.clone(), || {
+            let (mut info, mut mappings) = self.get_mapping_tree(id)?;
 
-        let select_above =
-            mk_val_fn(move |k: Key, m: Mapping| Self::select_above(thin_begin, k, m));
-        let select_below = mk_val_fn(move |k: Key, m: Mapping| Self::select_below(thin_end, k, m));
+            let select_above =
+                mk_val_fn(move |k: Key, m: Mapping| Self::select_above(thin_begin, k, m));
+            let select_below =
+                mk_val_fn(move |k: Key, m: Mapping| Self::select_below(thin_end, k, m));
 
-        mappings.remove_range(thin_begin, thin_end, &select_below, &select_above)?;
-        self.update_mappings_root(id, &mut info, &mappings)
+            mappings.remove_range(thin_begin, thin_end, &select_below, &select_above)?;
+            self.update_mappings_root(id, &mut info, &mappings)
+        })
     }
 }
 

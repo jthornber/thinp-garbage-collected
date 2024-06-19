@@ -1,3 +1,4 @@
+pub mod batch;
 pub mod entry;
 mod format;
 mod pack;

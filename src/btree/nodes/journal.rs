@@ -5,7 +5,8 @@ use crate::block_cache::MetadataBlock;
 use crate::btree::node::*;
 use crate::btree::node_cache::*;
 use crate::byte_types::*;
-use crate::journal::Entry;
+use crate::journal::batch;
+use crate::journal::entry::*;
 use crate::packed_array::*;
 
 //-------------------------------------------------------------------------
@@ -27,33 +28,18 @@ fn to_bytes_many<V: Serializable>(values: &[V]) -> Bytes {
 //-------------------------------------------------------------------------
 
 pub struct JournalNode<N, V, Data> {
-    cache: Arc<Mutex<NodeCache>>,
     node: N,
     phantom_v: std::marker::PhantomData<V>,
     phantom_data: std::marker::PhantomData<Data>,
 }
 
 impl<N, V, Data> JournalNode<N, V, Data> {
-    pub fn new(cache: Arc<Mutex<NodeCache>>, node: N) -> Self {
+    pub fn new(node: N) -> Self {
         Self {
-            cache,
             node,
             phantom_v: std::marker::PhantomData,
             phantom_data: std::marker::PhantomData,
         }
-    }
-}
-
-impl<N, V, Data> JournalNode<N, V, Data>
-where
-    N: NodeR<V, Data>,
-    V: Serializable,
-    Data: Readable,
-{
-    // FIXME: I'd like to return  Result<()> from here, but most of the node ops
-    // are assumed to be unable to fail.  Revisit.
-    pub fn add_op(&mut self, op: Entry) {
-        self.cache.lock().unwrap().add_journal_op(op).unwrap()
     }
 }
 
@@ -122,14 +108,14 @@ where
     fn overwrite(&mut self, idx: usize, k: Key, value: &V) -> NodeInsertOutcome {
         let loc = self.node.n_ptr().loc;
         let op = Entry::Overwrite(loc, idx as u32, k, to_bytes(value));
-        self.add_op(op);
+        batch::add_entry(op);
         self.node.overwrite(idx, k, value)
     }
 
     fn insert(&mut self, idx: usize, k: Key, value: &V) -> NodeInsertOutcome {
         let loc = self.node.n_ptr().loc;
         let op = Entry::Insert(loc, idx as u32, k, to_bytes(value));
-        self.add_op(op);
+        batch::add_entry(op);
         self.node.insert(idx, k, value)
     }
 
@@ -137,7 +123,7 @@ where
         let loc = self.node.n_ptr().loc;
         let serialized_values = values.iter().map(|v| to_bytes(v)).collect();
         let op = Entry::Prepend(loc, keys.to_vec(), serialized_values);
-        self.add_op(op);
+        batch::add_entry(op);
         self.node.prepend(keys, values)
     }
 
@@ -145,14 +131,14 @@ where
         let loc = self.node.n_ptr().loc;
         let serialized_values = values.iter().map(|v| to_bytes(v)).collect();
         let op = Entry::Append(loc, keys.to_vec(), serialized_values);
-        self.add_op(op);
+        batch::add_entry(op);
         self.node.append(keys, values)
     }
 
     fn erase(&mut self, b_idx: usize, e_idx: usize) {
         let loc = self.node.n_ptr().loc;
         let op = Entry::Erase(loc, b_idx as u32, e_idx as u32);
-        self.add_op(op);
+        batch::add_entry(op);
         self.node.erase(b_idx, e_idx)
     }
 }

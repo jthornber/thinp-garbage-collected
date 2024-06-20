@@ -7,6 +7,7 @@ use crate::block_cache::*;
 use crate::btree::node::*;
 use crate::btree::nodes::journal::*;
 use crate::byte_types::*;
+use crate::journal::BatchCompletion;
 use crate::packed_array::*;
 
 //-------------------------------------------------------------------------
@@ -88,6 +89,8 @@ impl NodeCacheInner {
 
 //-------------------------------------------------------------------------
 
+type BatchId = u64;
+
 pub struct NodeCache {
     inner: Arc<Mutex<NodeCacheInner>>,
 }
@@ -126,6 +129,35 @@ impl NodeCache {
     ) -> Result<JournalNode<Node, V, ExclusiveProxy>> {
         let mut inner = self.inner.lock().unwrap();
         inner.shadow(n_ptr, snap_time)
+    }
+
+    pub fn get_batch_id(&self) -> BatchId {
+        // FIXME: finish once the block cache has been rewritten
+        0
+    }
+
+    pub fn unpin_batch(&self, id: BatchId) {
+        // FIXME: finish once the block cache has been rewritten
+    }
+}
+
+//-------------------------------------------------------------------------
+
+pub struct CacheCompletion {
+    cache: Arc<NodeCache>,
+    id: BatchId,
+}
+
+impl CacheCompletion {
+    pub fn new(cache: Arc<NodeCache>) -> Self {
+        let id = cache.get_batch_id();
+        Self { cache, id }
+    }
+}
+
+impl BatchCompletion for CacheCompletion {
+    fn complete(&self) {
+        self.cache.unpin_batch(self.id);
     }
 }
 

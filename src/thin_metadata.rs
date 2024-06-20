@@ -95,19 +95,33 @@ type MappingTree = BTree<
 
 //-------------------------------------------------------------------------
 
-fn journalled<T, F: FnOnce() -> Result<T>>(journal: Arc<Mutex<Journal>>, action: F) -> Result<T> {
-    batch::begin_batch();
-    let r = action();
+struct Journaller {
+    journal: Arc<Mutex<Journal>>,
+    cache: Arc<NodeCache>,
+}
 
-    // We need to write the batch to the journal regardless since the node will
-    // have been updated.
-    let b = Batch {
-        ops: batch::end_batch()?,
-        completion: None, // FIXME: use completion from node cache
-    };
-    journal.lock().unwrap().add_batch(b);
+impl Journaller {
+    fn new(journal: Arc<Mutex<Journal>>, cache: Arc<NodeCache>) -> Self {
+        Journaller { journal, cache }
+    }
 
-    r
+    fn batch<T, F: FnOnce() -> Result<T>>(&self, action: F) -> Result<T> {
+        let batch_id = self.cache.get_batch_id();
+        batch::begin_batch();
+        let r = action();
+
+        // We need to write the batch to the journal regardless since the node will
+        // have been updated.
+        let completion: Option<Box<dyn BatchCompletion>> =
+            Some(Box::new(CacheCompletion::new(self.cache.clone())));
+        let b = Batch {
+            ops: batch::end_batch()?,
+            completion,
+        };
+        self.journal.lock().unwrap().add_batch(b);
+
+        r
+    }
 }
 
 //-------------------------------------------------------------------------
@@ -197,8 +211,18 @@ impl Pool {
         Ok(())
     }
 
+    fn journalled<T, F: FnOnce() -> Result<T>>(&self, action: F) -> Result<T> {
+        let journaller = Journaller::new(self.journal.clone(), self.cache.clone());
+        journaller.batch(action)
+    }
+
+    fn journaller(&self) -> Journaller {
+        Journaller::new(self.journal.clone(), self.cache.clone())
+    }
+
     pub fn create_thin_(&mut self, size: VBlock) -> Result<(ThinID, MappingTree)> {
-        journalled(self.journal.clone(), || {
+        let j = self.journaller();
+        j.batch(|| {
             // Choose a new id
             let id = self.new_thin_id();
 
@@ -210,7 +234,8 @@ impl Pool {
     }
 
     pub fn create_thin(&mut self, size: VBlock) -> Result<ThinID> {
-        journalled(self.journal.clone(), || {
+        let j = self.journaller();
+        j.batch(|| {
             let (id, mappings) = self.create_thin_(size)?;
             // Add thin_info to btree
             let info = ThinInfo {
@@ -224,7 +249,8 @@ impl Pool {
     }
 
     pub fn create_thick(&mut self, size: VBlock) -> Result<ThinID> {
-        journalled(self.journal.clone(), || {
+        let j = self.journaller();
+        j.batch(|| {
             // Create a new thin
             let (id, mut mappings) = self.create_thin_(size)?;
 
@@ -266,13 +292,15 @@ impl Pool {
     }
 
     pub fn create_snap(&mut self, _origin: ThinID) -> Result<ThinID> {
-        journalled(self.journal.clone(), || {
+        let j = self.journaller();
+        j.batch(|| {
             todo!();
         })
     }
 
     pub fn delete_thin(&mut self, dev: ThinID) -> Result<()> {
-        journalled(self.journal.clone(), || {
+        let j = self.journaller();
+        j.batch(|| {
             self.infos.remove(dev);
             self.update_info_root()?;
             Ok(())
@@ -355,9 +383,36 @@ impl Pool {
         mappings: &mut MappingTree,
         vbegin: VBlock,
         vend: VBlock,
-    ) -> Result<Mapping> {
-        // Don't fill this in, I'll do it.
-        todo!();
+    ) -> Result<Vec<Mapping>> {
+        // Calculate the number of blocks to allocate
+        let size = vend - vbegin;
+
+        // Allocate the required physical blocks
+        let (total, runs) = self.data_alloc.alloc_many(size, 0)?;
+        if total != size {
+            // Not enough space, free the allocated data and return an error
+            for (b, e) in runs {
+                self.data_alloc.free(b, e - b)?;
+            }
+            return Err(anyhow!("Could not allocate enough data space"));
+        }
+
+        // Create a new mapping for the allocated blocks
+        let mut virt_block = vbegin;
+        let mut new_mappings = Vec::new();
+        for (b, e) in runs {
+            let mapping = Mapping {
+                b,
+                e,
+                snap_time: self.snap_time,
+            };
+            mappings.insert(virt_block, &mapping)?;
+            new_mappings.push(mapping);
+            virt_block += e - b;
+        }
+
+        // Return the new mappings
+        Ok(new_mappings)
     }
 
     fn should_break_sharing(info: &ThinInfo, m: &Mapping) -> bool {
@@ -386,20 +441,34 @@ impl Pool {
         self.update_info_root()
     }
 
+    fn provision_range(
+        &mut self,
+        mappings: &mut MappingTree,
+        mut current: VBlock,
+        end: VBlock,
+    ) -> Result<Vec<(VBlock, Mapping)>> {
+        let mut provisioned = Vec::new();
+        let new_mappings = self.provision(mappings, current, end)?;
+        for new_mapping in new_mappings {
+            provisioned.push((current, new_mapping));
+            current += new_mapping.e - new_mapping.b;
+        }
+        Ok(provisioned)
+    }
+
     pub fn get_write_mapping(
         &mut self,
         id: ThinID,
         thin_begin: VBlock,
         thin_end: VBlock,
     ) -> Result<Vec<(VBlock, Mapping)>> {
-        journalled(self.journal.clone(), || {
+        let j = self.journaller();
+        j.batch(|| {
             let (mut info, mut mappings) = self.get_mapping_tree(id)?;
-
             let select_above =
                 mk_val_fn(move |k: Key, m: Mapping| Self::select_above(thin_begin, k, m));
             let select_below =
                 mk_val_fn(move |k: Key, m: Mapping| Self::select_below(thin_end, k, m));
-
             let ms = mappings.lookup_range(thin_begin, thin_end, &select_above, &select_below)?;
 
             // Provision any gaps
@@ -407,18 +476,16 @@ impl Pool {
             let mut provisioned: Vec<(VBlock, Mapping)> = Vec::new();
             for (k, m) in ms.iter() {
                 if current < *k {
-                    // Provision new mapping for the gap
-                    let new_mapping = self.provision(&mut mappings, current, *k)?;
-                    provisioned.push((current, new_mapping));
+                    // Provision new mappings for the gap
+                    provisioned.extend(self.provision_range(&mut mappings, current, *k)?);
                 }
                 provisioned.push((*k, *m));
                 current = m.e;
             }
 
             if current < thin_end {
-                // Provision new mapping for the remaining gap
-                let new_mapping = self.provision(&mut mappings, current, thin_end)?;
-                provisioned.push((current, new_mapping));
+                // Provision new mappings for the remaining gap
+                provisioned.extend(self.provision_range(&mut mappings, current, thin_end)?);
             }
 
             // Break sharing if needed
@@ -434,7 +501,8 @@ impl Pool {
     }
 
     pub fn discard(&mut self, id: ThinID, thin_begin: VBlock, thin_end: VBlock) -> Result<()> {
-        journalled(self.journal.clone(), || {
+        let j = self.journaller();
+        j.batch(|| {
             let (mut info, mut mappings) = self.get_mapping_tree(id)?;
 
             let select_above =

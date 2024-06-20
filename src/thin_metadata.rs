@@ -27,23 +27,30 @@ use crate::types::*;
 #[derive(Ord, PartialOrd, Eq, PartialEq, Copy, Clone)]
 struct ThinInfo {
     size: VBlock,
+    snap_time: u32,
     root: NodePtr,
 }
 
 impl Serializable for ThinInfo {
     fn packed_len() -> usize {
-        8 + NodePtr::packed_len()
+        8 + 4 + NodePtr::packed_len()
     }
 
     fn pack<W: Write>(&self, w: &mut W) -> io::Result<()> {
         w.write_u64::<LittleEndian>(self.size)?;
+        w.write_u32::<LittleEndian>(self.snap_time)?;
         self.root.pack(w)
     }
 
     fn unpack<R: Read>(r: &mut R) -> io::Result<Self> {
         let size = r.read_u64::<LittleEndian>()?;
+        let snap_time = r.read_u32::<LittleEndian>()?;
         let root = NodePtr::unpack(r)?;
-        Ok(Self { size, root })
+        Ok(Self {
+            size,
+            snap_time,
+            root,
+        })
     }
 }
 
@@ -240,6 +247,7 @@ impl Pool {
             // Add thin_info to btree
             let info = ThinInfo {
                 size,
+                snap_time: self.snap_time,
                 root: mappings.root(),
             };
             self.infos.insert(id, &info)?;
@@ -260,6 +268,7 @@ impl Pool {
             // Add thin_info to btree
             let info = ThinInfo {
                 size,
+                snap_time: self.snap_time,
                 root: mappings.root(),
             };
             self.infos.insert(id, &info)?;
@@ -269,10 +278,36 @@ impl Pool {
         })
     }
 
-    pub fn create_snap(&mut self, _origin: ThinID) -> Result<ThinID> {
+    pub fn create_snap(&mut self, origin: ThinID) -> Result<ThinID> {
         let j = self.journaller();
         j.batch(|| {
-            todo!();
+            // Get the mapping tree and info for the origin thin device
+            let (mut origin_info, mut origin_mappings) = self.get_mapping_tree(origin)?;
+
+            // Create a snapshot of the origin mapping tree
+            let snap_mappings = origin_mappings.snap(self.snap_time);
+
+            // Choose a new id for the snapshot
+            let snap_id = self.new_thin_id();
+
+            // Create a new ThinInfo for the snapshot
+            let snap_info = ThinInfo {
+                size: origin_info.size,
+                snap_time: self.snap_time,
+                root: snap_mappings.root(),
+            };
+
+            // Insert the new ThinInfo for the snapshot into the infos BTree
+            self.infos.insert(snap_id, &snap_info)?;
+
+            // Update the snap_time in the ThinInfo for the origin thin device
+            origin_info.snap_time = self.snap_time;
+            self.snap_time += 1;
+            self.infos.insert(origin, &origin_info)?;
+
+            // Update the info root
+            self.update_info_root()?;
+            Ok(snap_id)
         })
     }
 

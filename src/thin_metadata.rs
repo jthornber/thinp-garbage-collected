@@ -1,5 +1,6 @@
 use anyhow::{anyhow, Result};
 use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
+use rio::{Completion, Rio};
 use std::collections::{BTreeMap, VecDeque};
 use std::fs::{self, OpenOptions};
 use std::io::{self, Read, Write};
@@ -263,7 +264,8 @@ impl Pool {
             let (id, mut mappings) = self.create_thin_(size)?;
 
             // Provision the entire range
-            self.provision(&mut mappings, 0, size)?;
+            let provisioned_mappings = self.provision(0, size)?;
+            self.insert_mappings(&mut mappings, provisioned_mappings)?;
 
             // Add thin_info to btree
             let info = ThinInfo {
@@ -399,8 +401,8 @@ impl Pool {
     }
 
     fn should_break_sharing(info: &ThinInfo, m: &Mapping) -> bool {
-        // Don't fill this in, I'll do it.
-        todo!();
+        // Was a snapshot taken since this mapping was created?
+        info.snap_time > m.snap_time
     }
 
     fn break_sharing(
@@ -408,9 +410,50 @@ impl Pool {
         mappings: &mut MappingTree,
         vbegin: VBlock,
         m: Mapping,
-    ) -> Result<Mapping> {
-        // Don't fill this in, I'll do it.
+    ) -> Result<Vec<Mapping>> {
+        // Calculate the size of the range to be duplicated
+        let size = m.e - m.b;
+
+        // Provision a new range of physical blocks for the duplicate range
+        let new_mappings = self.provision(vbegin, vbegin + size)?;
+        self.insert_mappings(mappings, new_mappings.clone())?; // FIXME: remove clone
+
+        // Queue the data copy operations
+        let mut copy_futures = Vec::new();
+        for (i, (_, new_mapping)) in new_mappings.iter().enumerate() {
+            let src_offset = m.b + i as u64 * (new_mapping.e - new_mapping.b);
+            let dst_offset = new_mapping.b;
+            let len = new_mapping.e - new_mapping.b;
+            copy_futures.push(self.copy_data(src_offset, dst_offset, len));
+        }
+
+        // Wait for all copy operations to complete
+        for future in copy_futures {
+            future.wait()?;
+        }
+
+        // Remove the existing range in the MappingTree
+        self.discard_(mappings, vbegin, vbegin + size)?;
+
+        // Overwrite the new mappings in the MappingTree
+        for (virt_block, new_mapping) in new_mappings.iter() {
+            mappings.insert(*virt_block, new_mapping)?;
+        }
+        // Return the new mappings
+        Ok(new_mappings.into_iter().map(|(_, m)| m).collect())
+    }
+
+    // Asynchronous method for copying data using rio
+    fn copy_data(&self, src: PBlock, dst: PBlock, size: PBlock) -> Completion<()> {
         todo!();
+
+        /*
+                let src_file = todo!();
+                let dst_file = todo!();
+                let rio = &self.rio;
+                rio.read_at(&src_file, src as u64 * 4096, size as usize * 4096)
+                    .and_then(move |buf| rio.write_at(&dst_file, dst as u64 * 4096, &buf))
+        */
     }
 
     fn update_mappings_root(
@@ -424,12 +467,7 @@ impl Pool {
         self.update_info_root()
     }
 
-    fn provision(
-        &mut self,
-        mappings: &mut MappingTree,
-        mut current: VBlock,
-        end: VBlock,
-    ) -> Result<Vec<(VBlock, Mapping)>> {
+    fn provision(&mut self, mut current: VBlock, end: VBlock) -> Result<Vec<(VBlock, Mapping)>> {
         let size = end - current;
         let (total, runs) = self.data_alloc.alloc_many(size, 0)?;
         if total != size {
@@ -439,7 +477,6 @@ impl Pool {
             }
             return Err(anyhow!("Could not allocate enough data space"));
         }
-
         let mut provisioned = Vec::new();
         for (b, e) in runs {
             let mapping = Mapping {
@@ -447,11 +484,32 @@ impl Pool {
                 e,
                 snap_time: self.snap_time,
             };
-            mappings.insert(current, &mapping)?;
             provisioned.push((current, mapping));
             current += e - b;
         }
         Ok(provisioned)
+    }
+
+    fn insert_mappings(
+        &mut self,
+        mappings: &mut MappingTree,
+        provisioned: Vec<(VBlock, Mapping)>,
+    ) -> Result<()> {
+        for (virt_block, mapping) in provisioned {
+            mappings.insert(virt_block, &mapping)?;
+        }
+        Ok(())
+    }
+
+    fn provision_and_insert(
+        &mut self,
+        mappings: &mut MappingTree,
+        current: VBlock,
+        end: VBlock,
+    ) -> Result<Vec<Mapping>> {
+        let provisioned = self.provision(current, end)?;
+        self.insert_mappings(mappings, provisioned.clone())?;
+        Ok(provisioned.into_iter().map(|(_, m)| m).collect())
     }
 
     pub fn get_write_mapping(
@@ -475,7 +533,9 @@ impl Pool {
             for (k, m) in ms.iter() {
                 if current < *k {
                     // Provision new mappings for the gap
-                    provisioned.extend(self.provision(&mut mappings, current, *k)?);
+                    let new_mappings = self.provision(current, *k)?;
+                    provisioned.extend(&new_mappings);
+                    self.insert_mappings(&mut mappings, new_mappings)?;
                 }
                 provisioned.push((*k, *m));
                 current = m.e;
@@ -483,32 +543,48 @@ impl Pool {
 
             if current < thin_end {
                 // Provision new mappings for the remaining gap
-                provisioned.extend(self.provision(&mut mappings, current, thin_end)?);
+                let new_mappings = self.provision(current, thin_end)?;
+                provisioned.extend(&new_mappings);
+                self.insert_mappings(&mut mappings, new_mappings);
             }
 
             // Break sharing if needed
+            let mut final_provisioned: Vec<(VBlock, Mapping)> = Vec::new();
             for (k, m) in provisioned.iter_mut() {
                 if Self::should_break_sharing(&info.clone(), m) {
-                    *m = self.break_sharing(&mut mappings, *k as VBlock, *m)?;
+                    let broken_mappings = self.break_sharing(&mut mappings, *k as VBlock, *m)?;
+                    for broken_mapping in broken_mappings {
+                        final_provisioned.push((*k, broken_mapping));
+                    }
+                } else {
+                    final_provisioned.push((*k, *m));
                 }
             }
 
             self.update_mappings_root(id, &mut info, &mappings)?;
-            Ok(provisioned)
+            Ok(final_provisioned)
         })
+    }
+
+    fn discard_(
+        &mut self,
+        mappings: &mut MappingTree,
+        thin_begin: VBlock,
+        thin_end: VBlock,
+    ) -> Result<()> {
+        let select_above =
+            mk_val_fn(move |k: Key, m: Mapping| Self::select_above(thin_begin, k, m));
+        let select_below = mk_val_fn(move |k: Key, m: Mapping| Self::select_below(thin_end, k, m));
+
+        mappings.remove_range(thin_begin, thin_end, &select_below, &select_above)?;
+        Ok(())
     }
 
     pub fn discard(&mut self, id: ThinID, thin_begin: VBlock, thin_end: VBlock) -> Result<()> {
         let j = self.journaller();
         j.batch(|| {
             let (mut info, mut mappings) = self.get_mapping_tree(id)?;
-
-            let select_above =
-                mk_val_fn(move |k: Key, m: Mapping| Self::select_above(thin_begin, k, m));
-            let select_below =
-                mk_val_fn(move |k: Key, m: Mapping| Self::select_below(thin_end, k, m));
-
-            mappings.remove_range(thin_begin, thin_end, &select_below, &select_above)?;
+            self.discard_(&mut mappings, thin_begin, thin_end)?;
             self.update_mappings_root(id, &mut info, &mappings)
         })
     }

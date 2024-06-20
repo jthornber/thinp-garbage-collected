@@ -254,30 +254,8 @@ impl Pool {
             // Create a new thin
             let (id, mut mappings) = self.create_thin_(size)?;
 
-            // Allocate enough data space to completely map it
-            let (total, runs) = self.data_alloc.alloc_many(size, 0)?;
-
-            if total != size {
-                // not enough space, free off that data and return error
-                for (b, e) in runs {
-                    self.data_alloc.free(b, e - b)?;
-                }
-
-                return Err(anyhow!("Could not allocate enough data space"));
-            }
-
-            // Insert mappings
-            let mut virt_block = 0;
-            for (b, e) in runs {
-                mappings.insert(
-                    virt_block,
-                    &Mapping {
-                        b,
-                        e,
-                        snap_time: self.snap_time,
-                    },
-                )?;
-            }
+            // Provision the entire range
+            self.provision(&mut mappings, 0, size)?;
 
             // Add thin_info to btree
             let info = ThinInfo {
@@ -378,43 +356,6 @@ impl Pool {
         mappings.lookup_range(thin_begin, thin_end, &select_above, &select_below)
     }
 
-    fn provision(
-        &mut self,
-        mappings: &mut MappingTree,
-        vbegin: VBlock,
-        vend: VBlock,
-    ) -> Result<Vec<Mapping>> {
-        // Calculate the number of blocks to allocate
-        let size = vend - vbegin;
-
-        // Allocate the required physical blocks
-        let (total, runs) = self.data_alloc.alloc_many(size, 0)?;
-        if total != size {
-            // Not enough space, free the allocated data and return an error
-            for (b, e) in runs {
-                self.data_alloc.free(b, e - b)?;
-            }
-            return Err(anyhow!("Could not allocate enough data space"));
-        }
-
-        // Create a new mapping for the allocated blocks
-        let mut virt_block = vbegin;
-        let mut new_mappings = Vec::new();
-        for (b, e) in runs {
-            let mapping = Mapping {
-                b,
-                e,
-                snap_time: self.snap_time,
-            };
-            mappings.insert(virt_block, &mapping)?;
-            new_mappings.push(mapping);
-            virt_block += e - b;
-        }
-
-        // Return the new mappings
-        Ok(new_mappings)
-    }
-
     fn should_break_sharing(info: &ThinInfo, m: &Mapping) -> bool {
         // Don't fill this in, I'll do it.
         todo!();
@@ -441,17 +382,32 @@ impl Pool {
         self.update_info_root()
     }
 
-    fn provision_range(
+    fn provision(
         &mut self,
         mappings: &mut MappingTree,
         mut current: VBlock,
         end: VBlock,
     ) -> Result<Vec<(VBlock, Mapping)>> {
+        let size = end - current;
+        let (total, runs) = self.data_alloc.alloc_many(size, 0)?;
+        if total != size {
+            // Not enough space, free the allocated data and return an error
+            for (b, e) in runs {
+                self.data_alloc.free(b, e - b)?;
+            }
+            return Err(anyhow!("Could not allocate enough data space"));
+        }
+
         let mut provisioned = Vec::new();
-        let new_mappings = self.provision(mappings, current, end)?;
-        for new_mapping in new_mappings {
-            provisioned.push((current, new_mapping));
-            current += new_mapping.e - new_mapping.b;
+        for (b, e) in runs {
+            let mapping = Mapping {
+                b,
+                e,
+                snap_time: self.snap_time,
+            };
+            mappings.insert(current, &mapping)?;
+            provisioned.push((current, mapping));
+            current += e - b;
         }
         Ok(provisioned)
     }
@@ -477,7 +433,7 @@ impl Pool {
             for (k, m) in ms.iter() {
                 if current < *k {
                     // Provision new mappings for the gap
-                    provisioned.extend(self.provision_range(&mut mappings, current, *k)?);
+                    provisioned.extend(self.provision(&mut mappings, current, *k)?);
                 }
                 provisioned.push((*k, *m));
                 current = m.e;
@@ -485,7 +441,7 @@ impl Pool {
 
             if current < thin_end {
                 // Provision new mappings for the remaining gap
-                provisioned.extend(self.provision_range(&mut mappings, current, thin_end)?);
+                provisioned.extend(self.provision(&mut mappings, current, thin_end)?);
             }
 
             // Break sharing if needed

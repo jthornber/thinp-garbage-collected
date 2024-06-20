@@ -26,7 +26,7 @@ use crate::types::*;
 //-------------------------------------------------------------------------
 
 #[derive(Ord, PartialOrd, Eq, PartialEq, Copy, Clone)]
-struct ThinInfo {
+pub struct ThinInfo {
     size: VBlock,
     snap_time: u32,
     root: NodePtr,
@@ -55,7 +55,7 @@ impl Serializable for ThinInfo {
     }
 }
 
-type InfoTree = BTree<
+pub type InfoTree = BTree<
     ThinInfo,
     SimpleNode<NodePtr, SharedProxy>,
     SimpleNode<NodePtr, ExclusiveProxy>,
@@ -66,10 +66,10 @@ type InfoTree = BTree<
 //-------------------------------------------------------------------------
 
 #[derive(Ord, PartialOrd, Eq, PartialEq, Copy, Clone)]
-struct Mapping {
-    b: PBlock,
-    e: PBlock,
-    snap_time: u32,
+pub struct Mapping {
+    pub b: PBlock,
+    pub e: PBlock,
+    pub snap_time: u32,
 }
 
 impl Serializable for Mapping {
@@ -93,7 +93,7 @@ impl Serializable for Mapping {
     }
 }
 
-type MappingTree = BTree<
+pub type MappingTree = BTree<
     Mapping,
     SimpleNode<NodePtr, SharedProxy>,
     SimpleNode<NodePtr, ExclusiveProxy>,
@@ -135,7 +135,7 @@ impl Journaller {
 //-------------------------------------------------------------------------
 
 #[allow(dead_code)]
-struct Pool {
+pub struct Pool {
     engine: Arc<dyn IoEngine>,
     journal: Arc<Mutex<Journal>>,
     cache: Arc<NodeCache>,
@@ -148,12 +148,12 @@ struct Pool {
     next_thin_id: ThinID,
 }
 
-struct Map {
+pub struct Map {
     data_begin: PBlock,
     len: PBlock,
 }
 
-enum Run {
+pub enum Run {
     Unmapped(VBlock), // len
     Mapped(Map),
 }
@@ -165,39 +165,61 @@ impl Pool {
         nr_metadata_blocks: u64,
         nr_data_blocks: u64,
     ) -> Result<Self> {
-        /*
-                let dir = dir.as_ref();
+        let dir = dir.as_ref();
+        // Create directory, failing if it already exists.
+        if dir.exists() {
+            return Err(anyhow::anyhow!("Directory already exists"));
+        }
+        fs::create_dir_all(dir)?;
+        // Create the node file in dir, this should have size 4k * nr_metadata_blocks
+        let node_file_path = dir.join("node_file");
+        let node_file_size = 4096 * nr_metadata_blocks;
+        let node_file = OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&node_file_path)?;
+        node_file.set_len(node_file_size)?;
 
-                // Create directory, failing if it already exists.
-                if dir.exists() {
-                    return Err(anyhow::anyhow!("Directory already exists"));
-                }
-                fs::create_dir_all(dir)?;
+        // Initialize the IoEngine
+        let engine = Arc::new(SyncIoEngine::new(&node_file_path, true)?);
 
-                // Create the node file in dir, this should have size 4k * 2^metadata_order
-                let node_file_path = dir.join("node_file");
-                let node_file_size = 4096 * nr_metadata_blocks;
-                let node_file = OpenOptions::new()
-                    .write(true)
-                    .create_new(true)
-                    .open(node_file_path)?;
-                node_file.set_len(node_file_size)?;
+        // Initialize the BlockCache
+        let block_cache = Arc::new(BlockCache::new(engine.clone(), 16)?);
 
-                // Create journal in dir
-                let journal_file_path = dir.join("journal");
-                let journal = Journal::create(journal_file_path)?;
+        // Initialize the BuddyAllocator for metadata and data
+        let meta_alloc = BuddyAllocator::new(nr_metadata_blocks);
+        let data_alloc = BuddyAllocator::new(nr_data_blocks);
 
-                // Initialize the buddy allocators
-                let meta_alloc = BuddyAllocator::new(nr_metadata_blocks);
-                let data_alloc = BuddyAllocator::new(nr_data_blocks);
-                Ok(Pool {
-                    journal,
-                    devs: BTreeMap::new(),
-                    meta_alloc,
-                    data_alloc,
-                })
-        */
-        todo!()
+        // Initialize the NodeCache
+        let node_cache = Arc::new(NodeCache::new(block_cache, meta_alloc));
+
+        // Create journal in dir
+        let journal_file_path = dir.join("journal");
+        let journal = Arc::new(Mutex::new(Journal::create(journal_file_path)?));
+
+        // Create an empty InfoTree
+        let infos = BTree::empty_tree(node_cache.clone())?;
+
+        // Initialize the active devices map
+        let active_devs = BTreeMap::new();
+
+        // Initialize the snap time and next thin ID
+        let snap_time = 0;
+        let next_thin_id = 0;
+
+        // Initialize the Rio instance
+        // let rio = Rio::new()?;
+        Ok(Pool {
+            engine,
+            journal,
+            cache: node_cache,
+            data_alloc,
+            infos,
+            active_devs,
+            snap_time,
+            next_thin_id,
+            // rio,
+        })
     }
 
     pub fn open<P: AsRef<Path>>(_dir: P) -> Self {

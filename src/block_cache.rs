@@ -36,6 +36,8 @@ struct EntryInner {
     block: Block,
 }
 
+// FIXME: why do we need to lock the inner, if there's a big lock on the BlockCache as a whole?
+// Nothing in CacheEntry is public.
 struct CacheEntry {
     inner: Mutex<EntryInner>,
     cond: Condvar,

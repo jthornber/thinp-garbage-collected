@@ -338,8 +338,15 @@ impl Pool {
     }
     */
 
+    // FIXME: we should cache the infos so we don't have to keep reading them
     fn get_mapping_tree(&self, dev: ThinID) -> Result<(ThinInfo, MappingTree)> {
-        todo!();
+        let info = self
+            .infos
+            .lookup(dev)?
+            .ok_or_else(|| anyhow!("ThinID not found"))?;
+        let mappings = MappingTree::open_tree(self.cache.clone(), info.root);
+
+        Ok((info, mappings))
     }
 
     // selects the part of a mapping that is above key_begin

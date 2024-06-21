@@ -120,17 +120,21 @@ fn build_mappings(ms: &[(VBlock, Mapping)]) -> Mappings {
 
 //-------------------------------------------------------------------------
 
-struct MetadataOps {
+#[derive(Default)]
+struct Ops {
+    zeroes: Vec<(PBlock, PBlock)>,
+    copies: Vec<(PBlock, PBlock, PBlock)>,
     removes: Vec<(VBlock, VBlock)>,
     inserts: Vec<(VBlock, Mapping)>,
 }
 
-impl MetadataOps {
-    fn new() -> Self {
-        Self {
-            removes: Vec::new(),
-            inserts: Vec::new(),
-        }
+impl Ops {
+    fn push_zero(&mut self, b: PBlock, e: PBlock) {
+        self.zeroes.push((b, e));
+    }
+
+    fn push_copy(&mut self, src_b: PBlock, src_e: PBlock, dst_b: PBlock) {
+        self.copies.push((src_b, src_e, dst_b));
     }
 
     fn push_insert(&mut self, vbegin: VBlock, m: &Mapping) {
@@ -156,6 +160,14 @@ impl MetadataOps {
         }
 
         self.removes.push((b, e));
+    }
+
+    fn zeroes(&self) -> &[(PBlock, PBlock)] {
+        &self.zeroes
+    }
+
+    fn copies(&self) -> &[(PBlock, PBlock, PBlock)] {
+        &self.copies
     }
 
     fn removes(&self) -> &[(VBlock, VBlock)] {
@@ -352,12 +364,10 @@ impl Pool {
         j.batch(|| {
             // Create a new thin
             let (id, mut mappings) = self.create_thin_(size)?;
-
-            let mut data_ops = Vec::new();
-            let mut metadata_ops = MetadataOps::new();
+            let mut ops = Ops::default();
 
             // Provision the entire range
-            let provisioned_mappings = self.provision(0, size, &mut metadata_ops, &mut data_ops)?;
+            let _ = self.provision(0, size, &mut ops)?;
 
             // Add thin_info to btree
             let info = ThinInfo {
@@ -365,9 +375,8 @@ impl Pool {
                 snap_time: self.snap_time,
                 root: mappings.root(),
             };
+            self.exec_ops(&mut mappings, &ops)?;
             self.infos.insert(id, &info)?;
-            self.copier.exec(&data_ops)?;
-            self.update_metadata(&mut mappings, &metadata_ops)?;
             self.update_info_root()?;
 
             Ok(id)
@@ -433,6 +442,8 @@ impl Pool {
         self.data_alloc.nr_blocks()
     }
     */
+
+    //---------------------
 
     // FIXME: we should cache the infos so we don't have to keep reading them
     fn get_mapping_tree(&self, dev: ThinID) -> Result<(ThinInfo, MappingTree)> {
@@ -519,8 +530,7 @@ impl Pool {
         &mut self,
         begin: VBlock,
         end: VBlock,
-        m_ops: &mut MetadataOps,
-        d_ops: &mut Vec<DataOp>,
+        ops: &mut Ops,
     ) -> Result<Vec<(VBlock, Mapping)>> {
         let len = end - begin;
 
@@ -536,7 +546,7 @@ impl Pool {
         let mut result = Vec::new();
         let mut current = begin;
         for (b, e) in runs {
-            d_ops.push(DataOp::Zero(ZeroOp { begin: b, end: e }));
+            ops.push_zero(b, e);
 
             let mapping = Mapping {
                 b,
@@ -544,7 +554,7 @@ impl Pool {
                 snap_time: self.snap_time,
             };
             result.push((current, mapping));
-            m_ops.push_insert(current, &mapping);
+            ops.push_insert(current, &mapping);
             current += e - b;
         }
 
@@ -560,10 +570,9 @@ impl Pool {
         &mut self,
         begin: VBlock,
         end: VBlock,
-        m_ops: &mut MetadataOps,
-        d_ops: &mut Vec<DataOp>,
+        ops: &mut Ops,
     ) -> Result<Vec<(VBlock, Mapping)>> {
-        m_ops.push_remove(begin, end);
+        ops.push_remove(begin, end);
 
         let len = end - begin;
         let (total, runs) = self.data_alloc.alloc_many(len, 0)?;
@@ -578,11 +587,7 @@ impl Pool {
         let mut result = Vec::new();
         let mut current = begin;
         for (b, e) in runs {
-            d_ops.push(DataOp::Copy(CopyOp {
-                src_begin: current,
-                src_end: current + (e - b),
-                dst_begin: b,
-            }));
+            ops.push_copy(current, current + (e - b), b);
 
             let mapping = Mapping {
                 b,
@@ -590,7 +595,7 @@ impl Pool {
                 snap_time: self.snap_time,
             };
             result.push((current, mapping));
-            m_ops.push_insert(current, &mapping);
+            ops.push_insert(current, &mapping);
             current += e - b;
         }
 
@@ -598,7 +603,27 @@ impl Pool {
     }
 
     // FIXME: what happens if we fail part way through?
-    fn update_metadata(&mut self, mappings: &mut MappingTree, ops: &MetadataOps) -> Result<()> {
+    // Any required data ops will be completed before we start updating the metadata.  That
+    // way if there's a crash there will be nothing to unroll, other than allocations which
+    // can be left to the garbage collector.
+    fn exec_ops(&mut self, mappings: &mut MappingTree, ops: &Ops) -> Result<()> {
+        let mut data_ops = Vec::new();
+
+        // build zero ops
+        for (b, e) in ops.zeroes() {
+            data_ops.push(DataOp::Zero(ZeroOp { begin: *b, end: *e }));
+        }
+
+        // build copy ops
+        for (src_begin, src_end, dst_begin) in ops.copies() {
+            data_ops.push(DataOp::Copy(CopyOp {
+                src_begin: *src_begin,
+                src_end: *src_end,
+                dst_begin: *dst_begin,
+            }));
+        }
+        self.copier.exec(&data_ops)?;
+
         for (b, e) in ops.removes() {
             self.discard_(mappings, *b, *e)?;
         }
@@ -621,8 +646,7 @@ impl Pool {
 
         let j = self.journaller();
         j.batch(|| {
-            let mut data_ops = Vec::new();
-            let mut metadata_ops = MetadataOps::new();
+            let mut ops = Ops::default();
 
             // Provision unmapped areas
             let mut current = thin_begin;
@@ -630,8 +654,7 @@ impl Pool {
             for (vbegin, m) in &ms {
                 if current < *vbegin {
                     // Provision new mappings for the gap
-                    let new_mappings =
-                        self.provision(current, *vbegin, &mut metadata_ops, &mut data_ops)?;
+                    let new_mappings = self.provision(current, *vbegin, &mut ops)?;
                     provisioned.extend(&new_mappings);
                 }
                 provisioned.push((*vbegin, *m));
@@ -641,33 +664,23 @@ impl Pool {
             // There may be an unprovisioned area between the final mapping and the end of the
             // range.
             if current < thin_end {
-                let new_mappings =
-                    self.provision(current, thin_end, &mut metadata_ops, &mut data_ops)?;
+                let new_mappings = self.provision(current, thin_end, &mut ops)?;
                 provisioned.extend(&new_mappings);
             }
 
             // Break sharing if needed
             let mut final_provisioned: Vec<(VBlock, Mapping)> = Vec::new();
-            for (vbegin, m) in provisioned.iter_mut() {
-                if Self::should_break_sharing(&info.clone(), m) {
-                    let m_len = m.e - m.b;
-                    let new_mappings = self.break_sharing(
-                        *vbegin,
-                        *vbegin + m_len,
-                        &mut metadata_ops,
-                        &mut data_ops,
-                    )?;
+            for (vbegin, m) in provisioned.iter() {
+                if Self::should_break_sharing(&info, m) {
+                    let len = m.e - m.b;
+                    let new_mappings = self.break_sharing(*vbegin, *vbegin + len, &mut ops)?;
                     final_provisioned.extend(&new_mappings);
                 } else {
                     final_provisioned.push((*vbegin, *m));
                 }
             }
 
-            // Any required data ops will be completed before we start updating the metadata.  That
-            // way if there's a crash there will be nothing to unroll, other than allocations which
-            // can be left to the garbage collector.
-            self.copier.exec(&data_ops)?;
-            self.update_metadata(&mut mappings, &metadata_ops)?;
+            self.exec_ops(&mut mappings, &ops)?;
             self.update_mappings_root(id, &mut info, &mappings)?;
 
             Ok(final_provisioned)

@@ -3,19 +3,19 @@ use std::result;
 use std::sync::Arc;
 use thiserror::Error;
 
-//-------------------------------------
+use crate::types::PBlock;
 
-pub type Block = u64;
+//-------------------------------------
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub struct CopyOp {
-    pub src_begin: Block,
-    pub src_end: Block,
-    pub dst_begin: Block,
+    pub src_begin: PBlock,
+    pub src_end: PBlock,
+    pub dst_begin: PBlock,
 }
 
 impl CopyOp {
-    pub fn len(&self) -> Block {
+    pub fn len(&self) -> PBlock {
         self.src_end - self.src_begin
     }
 }
@@ -24,8 +24,8 @@ impl CopyOp {
 
 #[derive(Copy, Clone, Debug)]
 pub struct ZeroOp {
-    pub begin: Block,
-    pub end: Block,
+    pub begin: PBlock,
+    pub end: PBlock,
 }
 
 //-------------------------------------
@@ -56,7 +56,7 @@ impl fmt::Display for IoDir {
 #[derive(Error, Clone, Debug)]
 pub enum CopyErr {
     #[error("errors {0:?}")]
-    BadIo(Vec<(IoDir, Block)>),
+    BadIo(Vec<(IoDir, PBlock)>),
 }
 
 pub type Result<T> = result::Result<T, CopyErr>;

@@ -133,8 +133,17 @@ impl MetadataOps {
         }
     }
 
-    fn push_insert(&mut self, vb: VBlock, m: &Mapping) {
-        self.inserts.push((vb, m.clone()));
+    fn push_insert(&mut self, vbegin: VBlock, m: &Mapping) {
+        self.inserts.push((vbegin, *m));
+        if let Some((vbegin, last_m)) = self.inserts.last_mut() {
+            if last_m.snap_time == m.snap_time && m.b == last_m.e {
+                // Merge mappings
+                last_m.e = m.e;
+                return;
+            }
+        }
+
+        self.inserts.push((vbegin, *m));
     }
 
     fn push_remove(&mut self, b: VBlock, e: VBlock) {
@@ -344,9 +353,11 @@ impl Pool {
             // Create a new thin
             let (id, mut mappings) = self.create_thin_(size)?;
 
+            let mut data_ops = Vec::new();
+            let mut metadata_ops = MetadataOps::new();
+
             // Provision the entire range
-            let provisioned_mappings = self.provision(0, size)?;
-            self.insert_mappings(&mut mappings, provisioned_mappings)?;
+            let provisioned_mappings = self.provision(0, size, &mut metadata_ops, &mut data_ops)?;
 
             // Add thin_info to btree
             let info = ThinInfo {
@@ -355,6 +366,8 @@ impl Pool {
                 root: mappings.root(),
             };
             self.infos.insert(id, &info)?;
+            self.copier.exec(&data_ops)?;
+            self.update_metadata(&mut mappings, &metadata_ops)?;
             self.update_info_root()?;
 
             Ok(id)
@@ -466,14 +479,11 @@ impl Pool {
         }
     }
 
-    pub fn get_read_mapping(
-        &self,
-        id: ThinID,
+    fn lookup_range(
+        mappings: &MappingTree,
         thin_begin: VBlock,
         thin_end: VBlock,
-    ) -> Result<Vec<(u64, Mapping)>> {
-        let (_, mappings) = self.get_mapping_tree(id)?;
-
+    ) -> Result<Vec<(VBlock, Mapping)>> {
         let select_above =
             mk_val_fn(move |k: Key, m: Mapping| Self::select_above(thin_begin, k, m));
         let select_below = mk_val_fn(move |k: Key, m: Mapping| Self::select_below(thin_end, k, m));
@@ -481,35 +491,17 @@ impl Pool {
         mappings.lookup_range(thin_begin, thin_end, &select_above, &select_below)
     }
 
+    pub fn get_read_mapping(
+        &self,
+        id: ThinID,
+        thin_begin: VBlock,
+        thin_end: VBlock,
+    ) -> Result<Vec<(VBlock, Mapping)>> {
+        let (_, mappings) = self.get_mapping_tree(id)?;
+        Self::lookup_range(&mappings, thin_begin, thin_end)
+    }
+
     //---------------------
-
-    fn should_break_sharing(info: &ThinInfo, m: &Mapping) -> bool {
-        // Was a snapshot taken since this mapping was created?
-        info.snap_time > m.snap_time
-    }
-
-    // I don't think we need this
-    fn break_sharing(&mut self, vbegin: VBlock, m: Mapping) -> Result<Vec<(VBlock, Mapping)>> {
-        // Calculate the size of the range to be duplicated
-        let size = m.e - m.b;
-
-        // Provision a new range of physical blocks for the duplicate range
-        let new_mappings = self.provision(vbegin, vbegin + size)?;
-        Ok(new_mappings)
-    }
-
-    // Asynchronous method for copying data using rio
-    fn copy_data(&self, src: PBlock, dst: PBlock, size: PBlock) -> Completion<()> {
-        todo!();
-
-        /*
-                let src_file = todo!();
-                let dst_file = todo!();
-                let rio = &self.rio;
-                rio.read_at(&src_file, src as u64 * 4096, size as usize * 4096)
-                    .and_then(move |buf| rio.write_at(&dst_file, dst as u64 * 4096, &buf))
-        */
-    }
 
     fn update_mappings_root(
         &mut self,
@@ -522,42 +514,91 @@ impl Pool {
         self.update_info_root()
     }
 
-    fn provision(&mut self, mut current: VBlock, end: VBlock) -> Result<Vec<(VBlock, Mapping)>> {
-        let size = end - current;
-        let (total, runs) = self.data_alloc.alloc_many(size, 0)?;
-        if total != size {
+    // FIXME: should we combine d_ops and m_ops?
+    fn provision(
+        &mut self,
+        begin: VBlock,
+        end: VBlock,
+        m_ops: &mut MetadataOps,
+        d_ops: &mut Vec<DataOp>,
+    ) -> Result<Vec<(VBlock, Mapping)>> {
+        let len = end - begin;
+
+        let (total, runs) = self.data_alloc.alloc_many(len, 0)?;
+        if total != len {
             // Not enough space, free the allocated data and return an error
             for (b, e) in runs {
                 self.data_alloc.free(b, e - b)?;
             }
             return Err(anyhow!("Could not allocate enough data space"));
         }
-        let mut provisioned = Vec::new();
+
+        let mut result = Vec::new();
+        let mut current = begin;
         for (b, e) in runs {
+            d_ops.push(DataOp::Zero(ZeroOp { begin: b, end: e }));
+
             let mapping = Mapping {
                 b,
                 e,
                 snap_time: self.snap_time,
             };
-            provisioned.push((current, mapping));
+            result.push((current, mapping));
+            m_ops.push_insert(current, &mapping);
             current += e - b;
         }
-        Ok(provisioned)
+
+        Ok(result)
     }
 
-    fn insert_mappings(
+    fn should_break_sharing(info: &ThinInfo, m: &Mapping) -> bool {
+        // Was a snapshot taken since this mapping was created?
+        info.snap_time > m.snap_time
+    }
+
+    fn break_sharing(
         &mut self,
-        mappings: &mut MappingTree,
-        provisioned: Vec<(VBlock, Mapping)>,
-    ) -> Result<()> {
-        for (virt_block, mapping) in provisioned {
-            mappings.insert(virt_block, &mapping)?;
+        begin: VBlock,
+        end: VBlock,
+        m_ops: &mut MetadataOps,
+        d_ops: &mut Vec<DataOp>,
+    ) -> Result<Vec<(VBlock, Mapping)>> {
+        m_ops.push_remove(begin, end);
+
+        let len = end - begin;
+        let (total, runs) = self.data_alloc.alloc_many(len, 0)?;
+        if total != len {
+            // Not enough space, free the allocated data and return an error
+            for (b, e) in runs {
+                self.data_alloc.free(b, e - b)?;
+            }
+            return Err(anyhow!("Could not allocate enough data space"));
         }
-        Ok(())
+
+        let mut result = Vec::new();
+        let mut current = begin;
+        for (b, e) in runs {
+            d_ops.push(DataOp::Copy(CopyOp {
+                src_begin: current,
+                src_end: current + (e - b),
+                dst_begin: b,
+            }));
+
+            let mapping = Mapping {
+                b,
+                e,
+                snap_time: self.snap_time,
+            };
+            result.push((current, mapping));
+            m_ops.push_insert(current, &mapping);
+            current += e - b;
+        }
+
+        Ok(result)
     }
 
     // FIXME: what happens if we fail part way through?
-    pub fn update_metadata(&mut self, mappings: &mut MappingTree, ops: &MetadataOps) -> Result<()> {
+    fn update_metadata(&mut self, mappings: &mut MappingTree, ops: &MetadataOps) -> Result<()> {
         for (b, e) in ops.removes() {
             self.discard_(mappings, *b, *e)?;
         }
@@ -575,34 +616,23 @@ impl Pool {
         thin_begin: VBlock,
         thin_end: VBlock,
     ) -> Result<Vec<(VBlock, Mapping)>> {
+        let (mut info, mut mappings) = self.get_mapping_tree(id)?;
+        let ms = Self::lookup_range(&mappings, thin_begin, thin_end)?;
+
         let j = self.journaller();
         j.batch(|| {
-            let (mut info, mut mappings) = self.get_mapping_tree(id)?;
-            let select_above =
-                mk_val_fn(move |k: Key, m: Mapping| Self::select_above(thin_begin, k, m));
-            let select_below =
-                mk_val_fn(move |k: Key, m: Mapping| Self::select_below(thin_end, k, m));
-            let ms = mappings.lookup_range(thin_begin, thin_end, &select_above, &select_below)?;
-
             let mut data_ops = Vec::new();
             let mut metadata_ops = MetadataOps::new();
 
-            // Run through the mappings, adding any new provisioned areas, or breaking sharing
+            // Provision unmapped areas
             let mut current = thin_begin;
             let mut provisioned = Vec::new();
             for (vbegin, m) in &ms {
                 if current < *vbegin {
                     // Provision new mappings for the gap
-                    let new_mappings = self.provision(current, *vbegin)?;
+                    let new_mappings =
+                        self.provision(current, *vbegin, &mut metadata_ops, &mut data_ops)?;
                     provisioned.extend(&new_mappings);
-
-                    for (v, m) in &new_mappings {
-                        data_ops.push(DataOp::Zero(ZeroOp {
-                            begin: m.b,
-                            end: m.e,
-                        }));
-                        metadata_ops.push_insert(*v, m);
-                    }
                 }
                 provisioned.push((*vbegin, *m));
                 current = m.e;
@@ -610,19 +640,10 @@ impl Pool {
 
             // There may be an unprovisioned area between the final mapping and the end of the
             // range.
-            // FIXME: factor out common code
             if current < thin_end {
-                // Provision new mappings for the remaining gap
-                let new_mappings = self.provision(current, thin_end)?;
+                let new_mappings =
+                    self.provision(current, thin_end, &mut metadata_ops, &mut data_ops)?;
                 provisioned.extend(&new_mappings);
-
-                for (v, m) in &new_mappings {
-                    data_ops.push(DataOp::Zero(ZeroOp {
-                        begin: m.b,
-                        end: m.e,
-                    }));
-                    metadata_ops.push_insert(*v, m);
-                }
             }
 
             // Break sharing if needed
@@ -630,17 +651,13 @@ impl Pool {
             for (vbegin, m) in provisioned.iter_mut() {
                 if Self::should_break_sharing(&info.clone(), m) {
                     let m_len = m.e - m.b;
-                    let broken_mappings = self.provision(*vbegin, *vbegin + m_len)?;
-                    metadata_ops.push_remove(*vbegin, *vbegin + m_len);
-                    for (vbegin, new_m) in broken_mappings {
-                        final_provisioned.push((vbegin, new_m));
-
-                        data_ops.push(DataOp::Copy(CopyOp {
-                            src_begin: vbegin,
-                            src_end: vbegin + m_len,
-                            dst_begin: new_m.b,
-                        }));
-                    }
+                    let new_mappings = self.break_sharing(
+                        *vbegin,
+                        *vbegin + m_len,
+                        &mut metadata_ops,
+                        &mut data_ops,
+                    )?;
+                    final_provisioned.extend(&new_mappings);
                 } else {
                     final_provisioned.push((*vbegin, *m));
                 }

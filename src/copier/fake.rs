@@ -2,7 +2,7 @@ use crate::copier::base::*;
 
 //-------------------------------------
 
-struct FakeCopier {}
+pub struct FakeCopier {}
 
 impl FakeCopier {
     pub fn new() -> Self {
@@ -11,11 +11,7 @@ impl FakeCopier {
 }
 
 impl Copier for FakeCopier {
-    fn copy(&mut self, ops: &[CopyOp]) -> Result<()> {
-        Ok(())
-    }
-
-    fn zero(&mut self, ops: &[ZeroOp]) -> Result<()> {
+    fn exec(&self, ops: &[DataOp]) -> Result<()> {
         Ok(())
     }
 }

@@ -16,6 +16,8 @@ use crate::btree::node_cache::*;
 use crate::btree::nodes::simple::*;
 use crate::btree::BTree;
 use crate::btree::*;
+use crate::copier::fake::*;
+use crate::copier::*;
 use crate::core::*;
 use crate::journal::batch;
 use crate::journal::entry::*;
@@ -103,6 +105,61 @@ pub type MappingTree = BTree<
 
 //-------------------------------------------------------------------------
 
+// FIXME: still needed?
+type Mappings = BTreeMap<VBlock, Mapping>;
+
+/// Converts from the vec that comes back from btree lookup to the more useful
+/// Mappings data structure (which is easier to adjust).
+fn build_mappings(ms: &[(VBlock, Mapping)]) -> Mappings {
+    let mut result = BTreeMap::new();
+    for (vbegin, m) in ms {
+        result.insert(*vbegin, *m);
+    }
+    result
+}
+
+//-------------------------------------------------------------------------
+
+struct MetadataOps {
+    removes: Vec<(VBlock, VBlock)>,
+    inserts: Vec<(VBlock, Mapping)>,
+}
+
+impl MetadataOps {
+    fn new() -> Self {
+        Self {
+            removes: Vec::new(),
+            inserts: Vec::new(),
+        }
+    }
+
+    fn push_insert(&mut self, vb: VBlock, m: &Mapping) {
+        self.inserts.push((vb, m.clone()));
+    }
+
+    fn push_remove(&mut self, b: VBlock, e: VBlock) {
+        if let Some((last_b, last_e)) = self.removes.last_mut() {
+            if *last_e == b {
+                // Merge ranges
+                *last_e = e;
+                return;
+            }
+        }
+
+        self.removes.push((b, e));
+    }
+
+    fn removes(&self) -> &[(VBlock, VBlock)] {
+        &self.removes
+    }
+
+    fn inserts(&self) -> &[(VBlock, Mapping)] {
+        &self.inserts
+    }
+}
+
+//-------------------------------------------------------------------------
+
 struct Journaller {
     journal: Arc<Mutex<Journal>>,
     cache: Arc<NodeCache>,
@@ -136,6 +193,7 @@ impl Journaller {
 
 #[allow(dead_code)]
 pub struct Pool {
+    copier: Arc<dyn Copier>,
     journal: Arc<Mutex<Journal>>,
     cache: Arc<NodeCache>,
     data_alloc: BuddyAllocator,
@@ -179,6 +237,8 @@ impl Pool {
             .open(&node_file_path)?;
         node_file.set_len(node_file_size)?;
 
+        let copier: Arc<dyn Copier> = Arc::new(FakeCopier::new());
+
         // Initialize the IoEngine
         let engine = Arc::new(SyncIoEngine::new(&node_file_path, true)?);
 
@@ -209,6 +269,7 @@ impl Pool {
         // Initialize the Rio instance
         // let rio = Rio::new()?;
         Ok(Pool {
+            copier,
             journal,
             cache: node_cache,
             data_alloc,
@@ -420,47 +481,21 @@ impl Pool {
         mappings.lookup_range(thin_begin, thin_end, &select_above, &select_below)
     }
 
+    //---------------------
+
     fn should_break_sharing(info: &ThinInfo, m: &Mapping) -> bool {
         // Was a snapshot taken since this mapping was created?
         info.snap_time > m.snap_time
     }
 
-    fn break_sharing(
-        &mut self,
-        mappings: &mut MappingTree,
-        vbegin: VBlock,
-        m: Mapping,
-    ) -> Result<Vec<Mapping>> {
+    // I don't think we need this
+    fn break_sharing(&mut self, vbegin: VBlock, m: Mapping) -> Result<Vec<(VBlock, Mapping)>> {
         // Calculate the size of the range to be duplicated
         let size = m.e - m.b;
 
         // Provision a new range of physical blocks for the duplicate range
         let new_mappings = self.provision(vbegin, vbegin + size)?;
-        self.insert_mappings(mappings, new_mappings.clone())?; // FIXME: remove clone
-
-        // Queue the data copy operations
-        let mut copy_futures = Vec::new();
-        for (i, (_, new_mapping)) in new_mappings.iter().enumerate() {
-            let src_offset = m.b + i as u64 * (new_mapping.e - new_mapping.b);
-            let dst_offset = new_mapping.b;
-            let len = new_mapping.e - new_mapping.b;
-            copy_futures.push(self.copy_data(src_offset, dst_offset, len));
-        }
-
-        // Wait for all copy operations to complete
-        for future in copy_futures {
-            future.wait()?;
-        }
-
-        // Remove the existing range in the MappingTree
-        self.discard_(mappings, vbegin, vbegin + size)?;
-
-        // Overwrite the new mappings in the MappingTree
-        for (virt_block, new_mapping) in new_mappings.iter() {
-            mappings.insert(*virt_block, new_mapping)?;
-        }
-        // Return the new mappings
-        Ok(new_mappings.into_iter().map(|(_, m)| m).collect())
+        Ok(new_mappings)
     }
 
     // Asynchronous method for copying data using rio
@@ -521,15 +556,17 @@ impl Pool {
         Ok(())
     }
 
-    fn provision_and_insert(
-        &mut self,
-        mappings: &mut MappingTree,
-        current: VBlock,
-        end: VBlock,
-    ) -> Result<Vec<Mapping>> {
-        let provisioned = self.provision(current, end)?;
-        self.insert_mappings(mappings, provisioned.clone())?;
-        Ok(provisioned.into_iter().map(|(_, m)| m).collect())
+    // FIXME: what happens if we fail part way through?
+    pub fn update_metadata(&mut self, mappings: &mut MappingTree, ops: &MetadataOps) -> Result<()> {
+        for (b, e) in ops.removes() {
+            self.discard_(mappings, *b, *e)?;
+        }
+
+        for (vbegin, m) in ops.inserts() {
+            mappings.insert(*vbegin, m)?;
+        }
+
+        Ok(())
     }
 
     pub fn get_write_mapping(
@@ -547,44 +584,80 @@ impl Pool {
                 mk_val_fn(move |k: Key, m: Mapping| Self::select_below(thin_end, k, m));
             let ms = mappings.lookup_range(thin_begin, thin_end, &select_above, &select_below)?;
 
-            // Provision any gaps
+            let mut data_ops = Vec::new();
+            let mut metadata_ops = MetadataOps::new();
+
+            // Run through the mappings, adding any new provisioned areas, or breaking sharing
             let mut current = thin_begin;
-            let mut provisioned: Vec<(VBlock, Mapping)> = Vec::new();
-            for (k, m) in ms.iter() {
-                if current < *k {
+            let mut provisioned = Vec::new();
+            for (vbegin, m) in &ms {
+                if current < *vbegin {
                     // Provision new mappings for the gap
-                    let new_mappings = self.provision(current, *k)?;
+                    let new_mappings = self.provision(current, *vbegin)?;
                     provisioned.extend(&new_mappings);
-                    self.insert_mappings(&mut mappings, new_mappings)?;
+
+                    for (v, m) in &new_mappings {
+                        data_ops.push(DataOp::Zero(ZeroOp {
+                            begin: m.b,
+                            end: m.e,
+                        }));
+                        metadata_ops.push_insert(*v, m);
+                    }
                 }
-                provisioned.push((*k, *m));
+                provisioned.push((*vbegin, *m));
                 current = m.e;
             }
 
+            // There may be an unprovisioned area between the final mapping and the end of the
+            // range.
+            // FIXME: factor out common code
             if current < thin_end {
                 // Provision new mappings for the remaining gap
                 let new_mappings = self.provision(current, thin_end)?;
                 provisioned.extend(&new_mappings);
-                self.insert_mappings(&mut mappings, new_mappings);
+
+                for (v, m) in &new_mappings {
+                    data_ops.push(DataOp::Zero(ZeroOp {
+                        begin: m.b,
+                        end: m.e,
+                    }));
+                    metadata_ops.push_insert(*v, m);
+                }
             }
 
             // Break sharing if needed
             let mut final_provisioned: Vec<(VBlock, Mapping)> = Vec::new();
-            for (k, m) in provisioned.iter_mut() {
+            for (vbegin, m) in provisioned.iter_mut() {
                 if Self::should_break_sharing(&info.clone(), m) {
-                    let broken_mappings = self.break_sharing(&mut mappings, *k as VBlock, *m)?;
-                    for broken_mapping in broken_mappings {
-                        final_provisioned.push((*k, broken_mapping));
+                    let m_len = m.e - m.b;
+                    let broken_mappings = self.provision(*vbegin, *vbegin + m_len)?;
+                    metadata_ops.push_remove(*vbegin, *vbegin + m_len);
+                    for (vbegin, new_m) in broken_mappings {
+                        final_provisioned.push((vbegin, new_m));
+
+                        data_ops.push(DataOp::Copy(CopyOp {
+                            src_begin: vbegin,
+                            src_end: vbegin + m_len,
+                            dst_begin: new_m.b,
+                        }));
                     }
                 } else {
-                    final_provisioned.push((*k, *m));
+                    final_provisioned.push((*vbegin, *m));
                 }
             }
 
+            // Any required data ops will be completed before we start updating the metadata.  That
+            // way if there's a crash there will be nothing to unroll, other than allocations which
+            // can be left to the garbage collector.
+            self.copier.exec(&data_ops)?;
+            self.update_metadata(&mut mappings, &metadata_ops)?;
             self.update_mappings_root(id, &mut info, &mappings)?;
+
             Ok(final_provisioned)
         })
     }
+
+    //---------------------
 
     fn discard_(
         &mut self,

@@ -13,5 +13,5 @@ mod lru;
 pub mod lua_bindings;
 mod packed_array;
 mod slab;
-pub mod thin_metadata;
+pub mod thin;
 mod types;

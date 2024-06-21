@@ -5,6 +5,7 @@ mod allocators;
 mod block_cache;
 mod btree;
 mod byte_types;
+mod copier;
 mod core;
 mod hash;
 mod iovec;

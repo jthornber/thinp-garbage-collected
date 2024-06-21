@@ -136,7 +136,6 @@ impl Journaller {
 
 #[allow(dead_code)]
 pub struct Pool {
-    engine: Arc<dyn IoEngine>,
     journal: Arc<Mutex<Journal>>,
     cache: Arc<NodeCache>,
     data_alloc: BuddyAllocator,
@@ -210,7 +209,6 @@ impl Pool {
         // Initialize the Rio instance
         // let rio = Rio::new()?;
         Ok(Pool {
-            engine,
             journal,
             cache: node_cache,
             data_alloc,

@@ -25,6 +25,8 @@ use crate::journal::*;
 use crate::packed_array::*;
 use crate::types::*;
 
+mod tests;
+
 //-------------------------------------------------------------------------
 
 #[derive(Ord, PartialOrd, Eq, PartialEq, Copy, Clone)]
@@ -229,12 +231,37 @@ impl Pool {
         nr_data_blocks: u64,
     ) -> Result<Self> {
         let dir = dir.as_ref();
-        // Create directory, failing if it already exists.
-        if dir.exists() {
-            return Err(anyhow::anyhow!("Directory already exists"));
+        if !dir.exists() {
+            return Err(anyhow::anyhow!("Directory does not exist"));
         }
-        fs::create_dir_all(dir)?;
-        // Create the node file in dir, this should have size 4k * nr_metadata_blocks
+        let node_file_path = Self::create_node_file(dir, nr_metadata_blocks)?;
+
+        let copier = Arc::new(FakeCopier::new());
+        let engine = Arc::new(SyncIoEngine::new(&node_file_path, true)?);
+        let block_cache = Arc::new(BlockCache::new(engine, 16)?);
+
+        let meta_alloc = BuddyAllocator::new(nr_metadata_blocks);
+        let data_alloc = BuddyAllocator::new(nr_data_blocks);
+
+        let node_cache = Arc::new(NodeCache::new(block_cache, meta_alloc));
+        let journal = Self::create_journal(dir)?;
+
+        let journaller = Journaller::new(journal.clone(), node_cache.clone());
+        let infos = journaller.batch(|| BTree::empty_tree(node_cache.clone()))?;
+
+        Ok(Pool {
+            copier,
+            journal,
+            cache: node_cache,
+            data_alloc,
+            infos,
+            active_devs: BTreeMap::new(),
+            snap_time: 0,
+            next_thin_id: 0,
+        })
+    }
+
+    fn create_node_file(dir: &Path, nr_metadata_blocks: u64) -> Result<PathBuf> {
         let node_file_path = dir.join("node_file");
         let node_file_size = 4096 * nr_metadata_blocks;
         let node_file = OpenOptions::new()
@@ -242,54 +269,21 @@ impl Pool {
             .create_new(true)
             .open(&node_file_path)?;
         node_file.set_len(node_file_size)?;
-
-        let copier: Arc<dyn Copier> = Arc::new(FakeCopier::new());
-
-        // Initialize the IoEngine
-        let engine = Arc::new(SyncIoEngine::new(&node_file_path, true)?);
-
-        // Initialize the BlockCache
-        let block_cache = Arc::new(BlockCache::new(engine.clone(), 16)?);
-
-        // Initialize the BuddyAllocator for metadata and data
-        let meta_alloc = BuddyAllocator::new(nr_metadata_blocks);
-        let data_alloc = BuddyAllocator::new(nr_data_blocks);
-
-        // Initialize the NodeCache
-        let node_cache = Arc::new(NodeCache::new(block_cache, meta_alloc));
-
-        // Create journal in dir
-        let journal_file_path = dir.join("journal");
-        let journal = Arc::new(Mutex::new(Journal::create(journal_file_path)?));
-
-        // Create an empty InfoTree
-        let infos = BTree::empty_tree(node_cache.clone())?;
-
-        // Initialize the active devices map
-        let active_devs = BTreeMap::new();
-
-        // Initialize the snap time and next thin ID
-        let snap_time = 0;
-        let next_thin_id = 0;
-
-        // Initialize the Rio instance
-        // let rio = Rio::new()?;
-        Ok(Pool {
-            copier,
-            journal,
-            cache: node_cache,
-            data_alloc,
-            infos,
-            active_devs,
-            snap_time,
-            next_thin_id,
-            // rio,
-        })
+        Ok(node_file_path)
     }
+
+    fn create_journal(dir: &Path) -> Result<Arc<Mutex<Journal>>> {
+        let journal_file_path = dir.join("journal");
+        Ok(Arc::new(Mutex::new(Journal::create(journal_file_path)?)))
+    }
+
+    //----------------------
 
     pub fn open<P: AsRef<Path>>(_dir: P) -> Self {
         todo!();
     }
+
+    //----------------------
 
     pub fn close(self) -> Result<()> {
         todo!()
@@ -300,6 +294,8 @@ impl Pool {
         self.next_thin_id += 1;
         id
     }
+
+    //----------------------
 
     fn update_info_root(&mut self) -> Result<()> {
         batch::add_entry(Entry::UpdateInfoRoot(self.infos.root()))?;

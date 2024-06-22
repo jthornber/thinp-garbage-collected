@@ -32,6 +32,7 @@ mlua = { version = "0.9.8", features = ["lua54", "vendored"] }
 num_enum = "0.7.2"
 rio = "0.9.4"
 safemem = "0.3.3"
+tempfile = "3.10"
 
 [[bin]]
 name = "dump_journal"

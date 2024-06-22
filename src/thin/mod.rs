@@ -23,8 +23,10 @@ use crate::journal::batch;
 use crate::journal::entry::*;
 use crate::journal::*;
 use crate::packed_array::*;
+use crate::thin::mapping::*;
 use crate::types::*;
 
+pub mod mapping;
 mod tests;
 
 //-------------------------------------------------------------------------
@@ -65,44 +67,6 @@ pub type InfoTree = BTree<
     SimpleNode<NodePtr, ExclusiveProxy>,
     SimpleNode<ThinInfo, SharedProxy>,
     SimpleNode<ThinInfo, ExclusiveProxy>,
->;
-
-//-------------------------------------------------------------------------
-
-#[derive(Ord, PartialOrd, Eq, PartialEq, Copy, Clone)]
-pub struct Mapping {
-    pub b: PBlock,
-    pub e: PBlock,
-    pub snap_time: u32,
-}
-
-impl Serializable for Mapping {
-    fn packed_len() -> usize {
-        8 + 8 + 4
-    }
-
-    fn pack<W: Write>(&self, w: &mut W) -> io::Result<()> {
-        w.write_u64::<LittleEndian>(self.b)?;
-        w.write_u64::<LittleEndian>(self.e)?;
-        w.write_u32::<LittleEndian>(self.snap_time)?;
-        Ok(())
-    }
-
-    fn unpack<R: Read>(r: &mut R) -> io::Result<Self> {
-        let b = r.read_u64::<LittleEndian>()?;
-        let e = r.read_u64::<LittleEndian>()?;
-        let snap_time = r.read_u32::<LittleEndian>()?;
-
-        Ok(Self { b, e, snap_time })
-    }
-}
-
-pub type MappingTree = BTree<
-    Mapping,
-    SimpleNode<NodePtr, SharedProxy>,
-    SimpleNode<NodePtr, ExclusiveProxy>,
-    SimpleNode<Mapping, SharedProxy>,
-    SimpleNode<Mapping, ExclusiveProxy>,
 >;
 
 //-------------------------------------------------------------------------
@@ -312,15 +276,13 @@ impl Pool {
     }
 
     pub fn create_thin_(&mut self, size: VBlock) -> Result<(ThinID, MappingTree)> {
-        self.journaller().batch(|| {
-            // Choose a new id
-            let id = self.new_thin_id();
+        // Choose a new id
+        let id = self.new_thin_id();
 
-            // create new btree
-            let mappings = MappingTree::empty_tree(self.cache.clone())?;
+        // create new btree
+        let mappings = MappingTree::empty_tree(self.cache.clone())?;
 
-            Ok((id, mappings))
-        })
+        Ok((id, mappings))
     }
 
     pub fn create_thin(&mut self, size: VBlock) -> Result<ThinID> {
@@ -424,48 +386,15 @@ impl Pool {
         Ok((info, mappings))
     }
 
-    // selects the part of a mapping that is above key_begin
-    fn select_above(key_begin: Key, k: Key, m: Mapping) -> Option<(Key, Mapping)> {
-        let len = m.e - m.b;
-        if k + len > key_begin {
-            let delta = key_begin - k;
-            Some((
-                key_begin,
-                Mapping {
-                    b: m.b + delta,
-                    e: m.e,
-                    snap_time: m.snap_time,
-                },
-            ))
-        } else {
-            None
-        }
-    }
-
-    // selects the part of a mapping that is below key_end
-    fn select_below(key_end: Key, k: Key, m: Mapping) -> Option<(Key, Mapping)> {
-        if k < key_end {
-            Some((
-                k,
-                Mapping {
-                    b: m.b,
-                    e: m.e.min(key_end),
-                    snap_time: m.snap_time,
-                },
-            ))
-        } else {
-            None
-        }
-    }
-
     fn lookup_range(
         mappings: &MappingTree,
         thin_begin: VBlock,
         thin_end: VBlock,
     ) -> Result<Vec<(VBlock, Mapping)>> {
         let select_above =
-            mk_val_fn(move |k: Key, m: Mapping| Self::select_above(thin_begin, k, m));
-        let select_below = mk_val_fn(move |k: Key, m: Mapping| Self::select_below(thin_end, k, m));
+            mk_val_fn(move |k: Key, m: Mapping| Mapping::select_above(thin_begin, k, m));
+        let select_below =
+            mk_val_fn(move |k: Key, m: Mapping| Mapping::select_below(thin_end, k, m));
 
         mappings.lookup_range(thin_begin, thin_end, &select_above, &select_below)
     }
@@ -659,8 +588,9 @@ impl Pool {
         thin_end: VBlock,
     ) -> Result<()> {
         let select_above =
-            mk_val_fn(move |k: Key, m: Mapping| Self::select_above(thin_begin, k, m));
-        let select_below = mk_val_fn(move |k: Key, m: Mapping| Self::select_below(thin_end, k, m));
+            mk_val_fn(move |k: Key, m: Mapping| Mapping::select_above(thin_begin, k, m));
+        let select_below =
+            mk_val_fn(move |k: Key, m: Mapping| Mapping::select_below(thin_end, k, m));
 
         mappings.remove_range(thin_begin, thin_end, &select_below, &select_above)?;
         Ok(())

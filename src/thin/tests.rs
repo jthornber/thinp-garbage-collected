@@ -1,46 +1,89 @@
 #[cfg(test)]
 mod tests {
     use crate::thin::*;
+
+    use anyhow::{ensure, Result};
     use std::sync::Arc;
     use tempfile::TempDir;
 
-    struct PoolFixture {
-        pool: Arc<Pool>,
+    struct Fixture {
+        pool: Pool,
         _temp_dir: TempDir,
     }
 
-    impl PoolFixture {
+    impl Fixture {
         fn new(nr_metadata_blocks: u64, nr_data_blocks: u64) -> Result<Self> {
             let temp_dir = TempDir::new()?;
             let dir_path = temp_dir.path();
 
             // TempDir::new() has already created the directory, so we can directly call Pool::create
-            let pool = Arc::new(Pool::create(dir_path, nr_metadata_blocks, nr_data_blocks)?);
+            let pool = Pool::create(dir_path, nr_metadata_blocks, nr_data_blocks)?;
 
-            Ok(PoolFixture {
+            Ok(Fixture {
                 pool,
                 _temp_dir: temp_dir,
             })
-        }
-
-        fn pool(&self) -> Arc<Pool> {
-            self.pool.clone()
         }
     }
 
     #[test]
     fn test_create_pool() -> Result<()> {
-        let fixture = PoolFixture::new(1000, 10000)?;
-        let pool = fixture.pool();
+        let fix = Fixture::new(1000, 10000)?;
 
         // Assertions remain the same
-        assert!(fixture._temp_dir.path().exists());
-        assert!(fixture._temp_dir.path().join("node_file").exists());
-        assert!(fixture._temp_dir.path().join("journal").exists());
+        assert!(fix._temp_dir.path().exists());
+        assert!(fix._temp_dir.path().join("node_file").exists());
+        assert!(fix._temp_dir.path().join("journal").exists());
 
-        assert_eq!(pool.snap_time, 0);
-        assert_eq!(pool.next_thin_id, 0);
-        assert!(pool.active_devs.is_empty());
+        assert_eq!(fix.pool.snap_time, 0);
+        assert_eq!(fix.pool.next_thin_id, 0);
+        assert!(fix.pool.active_devs.is_empty());
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_thin() -> Result<()> {
+        let mut fix = Fixture::new(1000, 10000)?;
+        fix.pool.create_thin(1000)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_thick() -> Result<()> {
+        let mut fix = Fixture::new(1000, 10000)?;
+        fix.pool.create_thick(1000)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_create_snap() -> Result<()> {
+        let mut fix = Fixture::new(1000, 10000)?;
+        let origin = fix.pool.create_thick(1000)?;
+        let _snap = fix.pool.create_snap(origin)?;
+        Ok(())
+    }
+
+    #[test]
+    fn test_provision() -> Result<()> {
+        let mut fix = Fixture::new(1000, 10000)?;
+        let dev = fix.pool.create_thin(1000)?;
+
+        let mappings = fix.pool.get_read_mapping(dev, 0, 1000)?;
+        ensure!(mappings.is_empty());
+
+        let mappings = fix.pool.get_write_mapping(dev, 0, 1000)?;
+        ensure!(!mappings.is_empty());
+        eprintln!("mappings = {:?}", mappings);
+
+        let mut total = 0;
+        for (_vblock, m) in &mappings {
+            total += m.len();
+        }
+        ensure!(total == 1000);
+
+        let mappings = fix.pool.get_read_mapping(dev, 0, 500)?;
+        ensure!(!mappings.is_empty());
 
         Ok(())
     }

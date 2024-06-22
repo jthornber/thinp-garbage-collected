@@ -3,6 +3,7 @@ use std::path::PathBuf;
 use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 
+use crate::thin::mapping::*;
 use crate::thin::*;
 use crate::types::*;
 

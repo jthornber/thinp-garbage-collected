@@ -105,21 +105,6 @@ pub type MappingTree = BTree<
 
 //-------------------------------------------------------------------------
 
-// FIXME: still needed?
-type Mappings = BTreeMap<VBlock, Mapping>;
-
-/// Converts from the vec that comes back from btree lookup to the more useful
-/// Mappings data structure (which is easier to adjust).
-fn build_mappings(ms: &[(VBlock, Mapping)]) -> Mappings {
-    let mut result = BTreeMap::new();
-    for (vbegin, m) in ms {
-        result.insert(*vbegin, *m);
-    }
-    result
-}
-
-//-------------------------------------------------------------------------
-
 #[derive(Default)]
 struct Ops {
     zeroes: Vec<(PBlock, PBlock)>,
@@ -588,10 +573,6 @@ impl Pool {
         Ok(result)
     }
 
-    // FIXME: what happens if we fail part way through?  Fail hard and let journal recovery sort
-    // it?  Or we could throw away the current journal batch *and* any changes to metadata, then
-    // force journal replay.
-    //
     // Any required data ops will be completed before we start updating the metadata.  That
     // way if there's a crash there will be nothing to unroll, other than allocations which
     // can be left to the garbage collector.

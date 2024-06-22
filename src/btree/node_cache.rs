@@ -53,14 +53,17 @@ impl NodeCacheInner {
         &mut self,
         is_leaf: bool,
     ) -> Result<JournalNode<Node, V, ExclusiveProxy>> {
-        if let Ok(loc) = self.alloc.alloc(1) {
-            let new = self.cache.zero_lock(loc as u32)?;
-            Node::init(loc as u32, new.clone(), is_leaf)?;
-            self.wrap_node(loc as u32, new)
-        } else {
-            // FIXME: resize the node file
-            panic!("out of nodes");
-            // Err(anyhow!("couldn't allocate new block"))
+        match self.alloc.alloc(1) {
+            Ok(loc) => {
+                let new = self.cache.zero_lock(loc as u32)?;
+                Node::init(loc as u32, new.clone(), is_leaf)?;
+                self.wrap_node(loc as u32, new)
+            }
+            Err(MemErr::OutOfSpace) => {
+                // FIXME: resize the node file and kick off the gc
+                panic!("out of nodes");
+            }
+            Err(e) => Err(anyhow::Error::from(e)),
         }
     }
 

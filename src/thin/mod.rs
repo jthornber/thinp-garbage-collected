@@ -631,39 +631,41 @@ impl Pool {
         thin_end: VBlock,
     ) -> Result<Vec<(VBlock, Mapping)>> {
         let (mut info, mut mappings) = self.get_mapping_tree(id)?;
-        let ms = Self::lookup_range(&mappings, thin_begin, thin_end)?;
+        let mappings_in_range = Self::lookup_range(&mappings, thin_begin, thin_end)?;
 
         self.journaller().batch(|| {
             let mut ops = Ops::default();
             let mut current = thin_begin;
             let mut result = Vec::new();
 
-            // Provisions any gap before the mapping, and breaks sharing if needed.
-            let mut process_mapping = |end: VBlock, m: Option<&Mapping>| -> Result<()> {
-                if current < end {
-                    result.extend(&self.provision(current, end, &mut ops)?);
+            // Closure to process mappings and gaps
+            let mut process_mapping = |vbegin: VBlock, m: Option<&Mapping>| -> Result<()> {
+                if current < vbegin {
+                    result.extend(self.provision(current, vbegin, &mut ops)?);
                 }
 
                 if let Some(m) = m {
                     if Self::should_break_sharing(&info, m) {
                         let len = m.e - m.b;
-                        result.extend(&self.break_sharing(end, end + len, &mut ops)?);
+                        result.extend(self.break_sharing(vbegin, vbegin + len, &mut ops)?);
                     } else {
-                        result.push((end, *m));
+                        result.push((vbegin, *m));
                     }
                 }
 
-                current = end;
+                current = vbegin;
                 Ok(())
             };
 
-            for (vbegin, m) in &ms {
+            // Process all mappings in the range
+            for (vbegin, m) in &mappings_in_range {
                 process_mapping(*vbegin, Some(m))?;
             }
 
-            // there may be a trailing gap
+            // Handle any trailing gap
             process_mapping(thin_end, None)?;
 
+            // Finalize operations
             self.exec_ops(&mut mappings, &ops)?;
             self.update_mappings_root(id, &mut info, &mappings)?;
 

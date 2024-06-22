@@ -156,230 +156,6 @@ fn get_prog_below<V: Serializable, N: NodeR<V, SharedProxy>>(node: &N, key: Key)
     prog
 }
 
-fn select_above<
-    V: Serializable,
-    INode: NodeR<NodePtr, SharedProxy>,
-    LNode: NodeR<V, SharedProxy>,
->(
-    cache: &NodeCache,
-    n_ptr: NodePtr,
-    key: Key,
-    val_above: &ValFn<V>,
-    results: &mut Vec<(Key, V)>,
-) -> Result<()> {
-    use NodeOp::*;
-
-    if cache.is_internal(n_ptr)? {
-        let node: INode = cache.read(n_ptr)?;
-
-        for op in get_prog_above(&node, key) {
-            match op {
-                AboveAndBelow(_) | Below(_) => {
-                    unreachable!();
-                }
-                Above(idx) => {
-                    select_above::<V, INode, LNode>(
-                        cache,
-                        node.get_value(idx),
-                        key,
-                        val_above,
-                        results,
-                    )?;
-                }
-                All(idx) => {
-                    select_all::<V, INode, LNode>(cache, node.get_value(idx), results)?;
-                }
-            }
-        }
-    } else {
-        let node: LNode = cache.read(n_ptr)?;
-        for op in get_prog_above::<V, LNode>(&node, key) {
-            match op {
-                AboveAndBelow(_) => {
-                    unreachable!();
-                }
-                Below(_) => {
-                    unreachable!();
-                }
-                Above(idx) => {
-                    if let Some((nk, nv)) = val_above(key, node.get_value(idx)) {
-                        results.push((nk, nv));
-                    }
-                }
-                All(idx) => {
-                    results.push((node.get_key(idx), node.get_value(idx)));
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn select_below<
-    V: Serializable,
-    INode: NodeR<NodePtr, SharedProxy>,
-    LNode: NodeR<V, SharedProxy>,
->(
-    cache: &NodeCache,
-    n_ptr: NodePtr,
-    key: Key,
-    val_below: &ValFn<V>,
-    results: &mut Vec<(Key, V)>,
-) -> Result<()> {
-    use NodeOp::*;
-
-    if cache.is_internal(n_ptr)? {
-        let node: INode = cache.read(n_ptr)?;
-
-        for op in get_prog_below(&node, key) {
-            match op {
-                AboveAndBelow(_) | Above(_) => {
-                    unreachable!();
-                }
-                Below(idx) => {
-                    select_below::<V, INode, LNode>(
-                        cache,
-                        node.get_value(idx),
-                        key,
-                        val_below,
-                        results,
-                    )?;
-                }
-                All(idx) => {
-                    select_all::<V, INode, LNode>(cache, node.get_value(idx), results)?;
-                }
-            }
-        }
-    } else {
-        let node: LNode = cache.read(n_ptr)?;
-        for op in get_prog_below::<V, LNode>(&node, key) {
-            match op {
-                AboveAndBelow(_) => {
-                    unreachable!();
-                }
-                Above(_) => {
-                    unreachable!();
-                }
-                Below(idx) => {
-                    if let Some((nk, nv)) = val_below(key, node.get_value(idx)) {
-                        results.push((nk, nv));
-                    }
-                }
-                All(idx) => {
-                    results.push((node.get_key(idx), node.get_value(idx)));
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
-fn select_all<V: Serializable, INode: NodeR<NodePtr, SharedProxy>, LNode: NodeR<V, SharedProxy>>(
-    cache: &NodeCache,
-    n_ptr: NodePtr,
-    results: &mut Vec<(Key, V)>,
-) -> Result<()> {
-    if cache.is_internal(n_ptr)? {
-        let node: INode = cache.read(n_ptr)?;
-        for i in 0..node.nr_entries() {
-            select_all::<V, INode, LNode>(cache, node.get_value(i), results)?;
-        }
-    } else {
-        let node: LNode = cache.read(n_ptr)?;
-        for i in 0..node.nr_entries() {
-            results.push((node.get_key(i), node.get_value(i)));
-        }
-    }
-    Ok(())
-}
-
-fn select_above_below<
-    V: Serializable,
-    INode: NodeR<NodePtr, SharedProxy>,
-    LNode: NodeR<V, SharedProxy>,
->(
-    cache: &NodeCache,
-    n_ptr: NodePtr,
-    key_begin: Key,
-    key_end: Key,
-    val_below: &ValFn<V>,
-    val_above: &ValFn<V>,
-    results: &mut Vec<(Key, V)>,
-) -> Result<()> {
-    use NodeOp::*;
-
-    if cache.is_internal(n_ptr)? {
-        let node: INode = cache.read(n_ptr)?;
-        for op in get_prog(&node, key_begin, key_end) {
-            match op {
-                AboveAndBelow(idx) => {
-                    select_above_below::<V, INode, LNode>(
-                        cache,
-                        node.get_value(idx),
-                        key_begin,
-                        key_end,
-                        val_below,
-                        val_above,
-                        results,
-                    )?;
-                }
-                Above(idx) => {
-                    select_above::<V, INode, LNode>(
-                        cache,
-                        node.get_value(idx),
-                        key_begin,
-                        val_above,
-                        results,
-                    )?;
-                }
-                Below(idx) => {
-                    select_below::<V, INode, LNode>(
-                        cache,
-                        node.get_value(idx),
-                        key_end,
-                        val_below,
-                        results,
-                    )?;
-                }
-                All(idx) => {
-                    select_all::<V, INode, LNode>(cache, node.get_value(idx), results)?;
-                }
-            }
-        }
-    } else {
-        let node: LNode = cache.read(n_ptr)?;
-        for op in get_prog::<V, LNode>(&node, key_begin, key_end) {
-            match op {
-                AboveAndBelow(idx) => {
-                    // we need to use both trim functions
-                    if let Some((nk, nv)) = val_above(node.get_key(idx), node.get_value(idx)) {
-                        if let Some((nk, nv)) = val_below(nk, nv) {
-                            results.push((nk, nv));
-                        }
-                    }
-                }
-                Above(idx) => {
-                    if let Some((nk, nv)) = val_above(node.get_key(idx), node.get_value(idx)) {
-                        results.push((nk, nv));
-                    }
-                }
-                Below(idx) => {
-                    if let Some((nk, nv)) = val_below(node.get_key(idx), node.get_value(idx)) {
-                        results.push((nk, nv));
-                    }
-                }
-                All(idx) => {
-                    results.push((node.get_key(idx), node.get_value(idx)));
-                }
-            }
-        }
-    }
-
-    Ok(())
-}
-
 impl<
         V: Serializable + Copy,
         INodeR: NodeR<NodePtr, SharedProxy>,
@@ -388,6 +164,189 @@ impl<
         LNodeW: NodeW<V, ExclusiveProxy>,
     > BTree<V, INodeR, INodeW, LNodeR, LNodeW>
 {
+    fn select_above(
+        &self,
+        n_ptr: NodePtr,
+        key: Key,
+        val_above: &ValFn<V>,
+        results: &mut Vec<(Key, V)>,
+    ) -> Result<()> {
+        use NodeOp::*;
+
+        if self.cache.is_internal(n_ptr)? {
+            let node: INodeR = self.cache.read(n_ptr)?;
+
+            for op in get_prog_above(&node, key) {
+                match op {
+                    AboveAndBelow(_) | Below(_) => {
+                        unreachable!();
+                    }
+                    Above(idx) => {
+                        self.select_above(node.get_value(idx), key, val_above, results)?;
+                    }
+                    All(idx) => {
+                        self.select_all(node.get_value(idx), results)?;
+                    }
+                }
+            }
+        } else {
+            let node: LNodeR = self.cache.read(n_ptr)?;
+            for op in get_prog_above::<V, LNodeR>(&node, key) {
+                match op {
+                    AboveAndBelow(_) => {
+                        unreachable!();
+                    }
+                    Below(_) => {
+                        unreachable!();
+                    }
+                    Above(idx) => {
+                        if let Some((nk, nv)) = val_above(key, node.get_value(idx)) {
+                            results.push((nk, nv));
+                        }
+                    }
+                    All(idx) => {
+                        results.push((node.get_key(idx), node.get_value(idx)));
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn select_below(
+        &self,
+        n_ptr: NodePtr,
+        key: Key,
+        val_below: &ValFn<V>,
+        results: &mut Vec<(Key, V)>,
+    ) -> Result<()> {
+        use NodeOp::*;
+
+        if self.cache.is_internal(n_ptr)? {
+            let node: INodeR = self.cache.read(n_ptr)?;
+
+            for op in get_prog_below(&node, key) {
+                match op {
+                    AboveAndBelow(_) | Above(_) => {
+                        unreachable!();
+                    }
+                    Below(idx) => {
+                        self.select_below(node.get_value(idx), key, val_below, results)?;
+                    }
+                    All(idx) => {
+                        self.select_all(node.get_value(idx), results)?;
+                    }
+                }
+            }
+        } else {
+            let node: LNodeR = self.cache.read(n_ptr)?;
+            for op in get_prog_below::<V, LNodeR>(&node, key) {
+                match op {
+                    AboveAndBelow(_) => {
+                        unreachable!();
+                    }
+                    Above(_) => {
+                        unreachable!();
+                    }
+                    Below(idx) => {
+                        if let Some((nk, nv)) = val_below(key, node.get_value(idx)) {
+                            results.push((nk, nv));
+                        }
+                    }
+                    All(idx) => {
+                        results.push((node.get_key(idx), node.get_value(idx)));
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    fn select_all(&self, n_ptr: NodePtr, results: &mut Vec<(Key, V)>) -> Result<()> {
+        if self.cache.is_internal(n_ptr)? {
+            let node: INodeR = self.cache.read(n_ptr)?;
+            for i in 0..node.nr_entries() {
+                self.select_all(node.get_value(i), results)?;
+            }
+        } else {
+            let node: LNodeR = self.cache.read(n_ptr)?;
+            for i in 0..node.nr_entries() {
+                results.push((node.get_key(i), node.get_value(i)));
+            }
+        }
+        Ok(())
+    }
+
+    fn select_above_below(
+        &self,
+        n_ptr: NodePtr,
+        key_begin: Key,
+        key_end: Key,
+        val_below: &ValFn<V>,
+        val_above: &ValFn<V>,
+        results: &mut Vec<(Key, V)>,
+    ) -> Result<()> {
+        use NodeOp::*;
+
+        if self.cache.is_internal(n_ptr)? {
+            let node: INodeR = self.cache.read(n_ptr)?;
+            for op in get_prog(&node, key_begin, key_end) {
+                match op {
+                    AboveAndBelow(idx) => {
+                        self.select_above_below(
+                            node.get_value(idx),
+                            key_begin,
+                            key_end,
+                            val_below,
+                            val_above,
+                            results,
+                        )?;
+                    }
+                    Above(idx) => {
+                        self.select_above(node.get_value(idx), key_begin, val_above, results)?;
+                    }
+                    Below(idx) => {
+                        self.select_below(node.get_value(idx), key_end, val_below, results)?;
+                    }
+                    All(idx) => {
+                        self.select_all(node.get_value(idx), results)?;
+                    }
+                }
+            }
+        } else {
+            let node: LNodeR = self.cache.read(n_ptr)?;
+            for op in get_prog::<V, LNodeR>(&node, key_begin, key_end) {
+                match op {
+                    AboveAndBelow(idx) => {
+                        // we need to use both trim functions
+                        if let Some((nk, nv)) = val_above(node.get_key(idx), node.get_value(idx)) {
+                            if let Some((nk, nv)) = val_below(nk, nv) {
+                                results.push((nk, nv));
+                            }
+                        }
+                    }
+                    Above(idx) => {
+                        if let Some((nk, nv)) = val_above(node.get_key(idx), node.get_value(idx)) {
+                            results.push((nk, nv));
+                        }
+                    }
+                    Below(idx) => {
+                        if let Some((nk, nv)) = val_below(node.get_key(idx), node.get_value(idx)) {
+                            results.push((nk, nv));
+                        }
+                    }
+                    All(idx) => {
+                        results.push((node.get_key(idx), node.get_value(idx)));
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Returns a vec of key, value pairs
     pub fn lookup_range(
         &self,
@@ -399,8 +358,7 @@ impl<
         let mut results = Vec::with_capacity(16);
 
         // FIXME: order of select_* params changes?
-        select_above_below::<V, INodeR, LNodeR>(
-            self.cache.as_ref(),
+        self.select_above_below(
             self.root,
             key_begin,
             key_end,

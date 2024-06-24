@@ -16,3 +16,5 @@ mod packed_array;
 mod slab;
 pub mod thin;
 mod types;
+mod varint;
+

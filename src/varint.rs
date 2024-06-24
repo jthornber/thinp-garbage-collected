@@ -3,7 +3,7 @@ use std::io::{self, Read, Write};
 
 //----------------------------------------------------------------
 
-fn write_varint<W: Write>(writer: &mut W, mut value: u64) -> io::Result<()> {
+pub fn write_varint<W: Write>(writer: &mut W, mut value: u64) -> io::Result<()> {
     while value > 0x7F {
         writer.write_u8(((value & 0x7F) | 0x80) as u8)?;
         value >>= 7;
@@ -12,7 +12,7 @@ fn write_varint<W: Write>(writer: &mut W, mut value: u64) -> io::Result<()> {
     Ok(())
 }
 
-fn read_varint<R: Read>(reader: &mut R) -> io::Result<u64> {
+pub fn read_varint<R: Read>(reader: &mut R) -> io::Result<u64> {
     let mut value = 0u64;
     for i in 0..10 {
         // max 10 bytes for a 64-bit varint

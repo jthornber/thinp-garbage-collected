@@ -1,7 +1,10 @@
+use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::collections::{BTreeMap, BTreeSet};
+use std::io::{self, Read, Write};
 
 use crate::allocators::bits::*;
 use crate::allocators::*;
+use crate::varint::*;
 
 //-------------------------------------
 
@@ -20,6 +23,47 @@ fn get_buddy(index: u64, order: usize) -> u64 {
 }
 
 impl BuddyAllocator {
+    pub fn pack(&self) -> io::Result<Vec<u8>> {
+        let mut packed = Vec::new();
+        packed.write_u64::<LittleEndian>(self.total_blocks)?;
+
+        for (order, blocks) in self.free_blocks.iter().enumerate() {
+            if !blocks.is_empty() {
+                packed.write_u8(order as u8)?;
+                write_varint(&mut packed, blocks.len() as u64)?;
+
+                let mut sorted_blocks: Vec<_> = blocks.iter().cloned().collect();
+                sorted_blocks.sort_unstable();
+
+                let mut prev_block = 0;
+                for &block in &sorted_blocks {
+                    let delta = block - prev_block;
+                    write_varint(&mut packed, delta)?;
+                    prev_block = block;
+                }
+            }
+        }
+        Ok(packed)
+    }
+
+    pub fn unpack(mut data: &[u8]) -> io::Result<Self> {
+        let total_blocks = data.read_u64::<LittleEndian>()?;
+        let mut alloc = BuddyAllocator::new_empty(total_blocks);
+
+        while !data.is_empty() {
+            let order = data.read_u8()? as usize;
+            let count = read_varint(&mut data)?;
+
+            let mut block = 0;
+            for _ in 0..count {
+                let delta = read_varint(&mut data)?;
+                block += delta;
+                alloc.free_blocks[order].insert(block);
+            }
+        }
+        Ok(alloc)
+    }
+
     pub fn new_empty(nr_blocks: u64) -> Self {
         let order = calc_order(nr_blocks);
 
@@ -565,6 +609,82 @@ fn test_free_small_blocks() -> Result<()> {
         !buddy.free_blocks[2].contains(&4),
         "Block 4 should not be free at order 2"
     );
+
+    Ok(())
+}
+
+#[test]
+fn test_buddy_allocator_pack_unpack() -> anyhow::Result<()> {
+    // Create a BuddyAllocator
+    let mut allocator = BuddyAllocator::new(1024);
+
+    // Perform some allocations and frees
+    let block1 = allocator.alloc(10)?;
+    let block2 = allocator.alloc(20)?;
+    allocator.free(block1, 10)?;
+    let block3 = allocator.alloc(5)?;
+
+    // Pack the allocator
+    let packed = allocator.pack()?;
+    eprintln!("packed size = {}", packed.len());
+
+    // Unpack to create a new allocator
+    let mut unpacked_allocator = BuddyAllocator::unpack(&packed)?;
+
+    // Verify that the unpacked allocator has the same state
+    assert_eq!(allocator.total_blocks, unpacked_allocator.total_blocks);
+    assert_eq!(
+        allocator.free_blocks.len(),
+        unpacked_allocator.free_blocks.len()
+    );
+
+    for (original, unpacked) in allocator
+        .free_blocks
+        .iter()
+        .zip(unpacked_allocator.free_blocks.iter())
+    {
+        eprintln!("orig: {:?}, unpack: {:?}", original, unpacked);
+        assert_eq!(original, unpacked);
+    }
+
+    // Perform the same allocations on the unpacked allocator to ensure it behaves identically
+    let block2 = allocator.alloc(20)?;
+    let block3 = allocator.alloc(5)?;
+    let unpacked_block2 = unpacked_allocator.alloc(20)?;
+    let unpacked_block3 = unpacked_allocator.alloc(5)?;
+
+    assert_eq!(block2, unpacked_block2);
+    assert_eq!(block3, unpacked_block3);
+
+    Ok(())
+}
+
+#[test]
+fn test_buddy_allocator_pack_pathological() -> anyhow::Result<()> {
+    // Create a BuddyAllocator with 1024 * 1024 blocks
+    let mut allocator = BuddyAllocator::new(1024 * 1024);
+
+    // Allocate every other block
+    for i in (0..1024 * 1024).step_by(2) {
+        allocator.alloc_at(i, 0)?;
+    }
+
+    // Pack the allocator
+    let packed = allocator.pack()?;
+
+    // Print the size of the packed data
+    println!("Packed size for pathological case: {} bytes", packed.len());
+
+    // Unpack to create a new allocator
+    let mut unpacked_allocator = BuddyAllocator::unpack(&packed)?;
+
+    // Verify that the unpacked allocator has the same state
+    assert_eq!(allocator.total_blocks, unpacked_allocator.total_blocks);
+    assert_eq!(allocator.free_blocks, unpacked_allocator.free_blocks);
+
+    // Try to allocate a free block in the unpacked allocator
+    let block = unpacked_allocator.alloc(1)?;
+    assert_eq!(block, 1, "First free block should be at index 1");
 
     Ok(())
 }

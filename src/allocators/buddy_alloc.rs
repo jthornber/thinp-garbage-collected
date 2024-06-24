@@ -22,6 +22,9 @@ fn get_buddy(index: u64, order: usize) -> u64 {
     index ^ (1 << order)
 }
 
+// Testing shows this value has v. similar performance between 0.05 and 0.5.
+const DENSITY_THRESHOLD: f64 = 0.1;
+
 impl BuddyAllocator {
     pub fn pack(&self) -> io::Result<Vec<u8>> {
         let mut packed = Vec::new();
@@ -30,16 +33,29 @@ impl BuddyAllocator {
         for (order, blocks) in self.free_blocks.iter().enumerate() {
             if !blocks.is_empty() {
                 packed.write_u8(order as u8)?;
-                write_varint(&mut packed, blocks.len() as u64)?;
+                let blocks_at_this_order = self.total_blocks >> order;
+                let density = blocks.len() as f64 / blocks_at_this_order as f64;
 
-                let mut sorted_blocks: Vec<_> = blocks.iter().cloned().collect();
-                sorted_blocks.sort_unstable();
-
-                let mut prev_block = 0;
-                for &block in &sorted_blocks {
-                    let delta = block - prev_block;
-                    write_varint(&mut packed, delta)?;
-                    prev_block = block;
+                if density > DENSITY_THRESHOLD {
+                    // Use bitmap
+                    packed.write_u8(1)?; // 1 indicates bitmap
+                    write_varint(&mut packed, blocks_at_this_order)?;
+                    let mut bitmap = vec![0u8; (blocks_at_this_order as usize + 7) / 8];
+                    for &block in blocks {
+                        let index = (block >> order) as usize;
+                        bitmap[index / 8] |= 1 << (index % 8);
+                    }
+                    packed.extend_from_slice(&bitmap);
+                } else {
+                    // Use delta encoding
+                    packed.write_u8(0)?; // 0 indicates delta encoding
+                    write_varint(&mut packed, blocks.len() as u64)?;
+                    let mut prev_block = 0;
+                    for &block in blocks {
+                        let delta = block - prev_block;
+                        write_varint(&mut packed, delta)?;
+                        prev_block = block;
+                    }
                 }
             }
         }
@@ -52,13 +68,29 @@ impl BuddyAllocator {
 
         while !data.is_empty() {
             let order = data.read_u8()? as usize;
-            let count = read_varint(&mut data)?;
+            let encoding_type = data.read_u8()?;
 
-            let mut block = 0;
-            for _ in 0..count {
-                let delta = read_varint(&mut data)?;
-                block += delta;
-                alloc.free_blocks[order].insert(block);
+            if encoding_type == 1 {
+                // bitmap
+                let blocks_at_this_order = read_varint(&mut data)?;
+                let bitmap_size = ((blocks_at_this_order + 7) / 8) as usize;
+                let bitmap = &data[..bitmap_size];
+                data = &data[bitmap_size..];
+
+                for i in 0..blocks_at_this_order {
+                    if bitmap[i as usize / 8] & (1 << (i % 8)) != 0 {
+                        alloc.free_blocks[order].insert(i << order);
+                    }
+                }
+            } else {
+                // delta encoding
+                let count = read_varint(&mut data)?;
+                let mut block = 0;
+                for _ in 0..count {
+                    let delta = read_varint(&mut data)?;
+                    block += delta;
+                    alloc.free_blocks[order].insert(block);
+                }
             }
         }
         Ok(alloc)
@@ -687,6 +719,57 @@ fn test_buddy_allocator_pack_pathological() -> anyhow::Result<()> {
     assert_eq!(block, 1, "First free block should be at index 1");
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use rand::Rng;
+
+    fn create_allocator_with_density(total_blocks: u64, density: f64) -> BuddyAllocator {
+        let mut allocator = BuddyAllocator::new(total_blocks);
+        let free_blocks = (total_blocks as f64 * density) as u64;
+        let mut rng = rand::thread_rng();
+
+        // Allocate blocks to achieve the desired density of free blocks
+        for _ in 0..(total_blocks - free_blocks) {
+            loop {
+                let block = rng.gen_range(0..total_blocks);
+                if allocator.alloc_at(block, 0).is_ok() {
+                    break;
+                }
+            }
+        }
+
+        allocator
+    }
+
+    #[test]
+    fn test_packing_efficiency_vs_density() -> io::Result<()> {
+        let total_blocks = 1_000_000; // 1 million blocks
+        let densities = [
+            0.01, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.99,
+        ];
+
+        println!("Density | Packed Size (bytes) | Bytes per Free Block");
+        println!("--------|---------------------|---------------------");
+
+        for &density in &densities {
+            let allocator = create_allocator_with_density(total_blocks, density);
+            let packed = allocator.pack()?;
+            let free_blocks = (total_blocks as f64 * density) as u64;
+            let bytes_per_free_block = packed.len() as f64 / free_blocks as f64;
+
+            println!(
+                "{:7.2} | {:19} | {:21.2}",
+                density,
+                packed.len(),
+                bytes_per_free_block
+            );
+        }
+
+        Ok(())
+    }
 }
 
 //-------------------------------------

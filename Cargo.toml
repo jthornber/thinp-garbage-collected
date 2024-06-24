@@ -34,5 +34,8 @@ rio = "0.9.4"
 safemem = "0.3.3"
 tempfile = "3.10"
 
+[dev-dependencies]
+rand = "0.8"
+
 [[bin]]
 name = "dump_journal"

@@ -18,13 +18,10 @@ pub fn calc_order_below(nr_blocks: u64) -> usize {
 /// Calculates the order of the lowest set bit in a given 64-bit unsigned integer.
 /// If the 2^order will not exceed nr_blocks.
 pub fn calc_min_order(n: u64, nr_blocks: u64) -> usize {
-    let min_order = n.trailing_zeros() as usize;
-    let max_order = 63 - nr_blocks.leading_zeros() as usize;
-    if min_order > max_order {
-        max_order
-    } else {
-        min_order
+    if nr_blocks == 0 {
+        return 0;
     }
+    n.trailing_zeros().min(nr_blocks.ilog2()) as usize
 }
 
 //-------------------------------------

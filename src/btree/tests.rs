@@ -14,9 +14,9 @@ mod test {
     use crate::allocators::*;
     use crate::block_cache::*;
     use crate::btree::node::*;
-    use crate::btree::node_cache::*;
     use crate::btree::nodes::simple::*;
     use crate::btree::range_value::RangeValue;
+    use crate::btree::transaction_manager::*;
     use crate::btree::BTree;
     use crate::core::*;
     use crate::journal::*;
@@ -97,7 +97,7 @@ mod test {
     struct Fixture {
         engine: Arc<dyn IoEngine>,
         journal: Arc<Mutex<Journal>>,
-        cache: Arc<NodeCache>,
+        tm: Arc<TransactionManager>,
         tree: TestTree,
         snap_time: u32,
     }
@@ -115,13 +115,13 @@ mod test {
             let engine = mk_engine(nr_metadata_blocks);
             let block_cache = Arc::new(BlockCache::new(engine.clone(), 16)?);
             let alloc = BuddyAllocator::new(nr_metadata_blocks as u64);
-            let node_cache = Arc::new(NodeCache::new(journal.clone(), block_cache, alloc));
-            let tree = BTree::empty_tree(node_cache.clone())?;
+            let tm = Arc::new(TransactionManager::new(journal.clone(), block_cache, alloc));
+            let tree = BTree::empty_tree(tm.clone())?;
 
             Ok(Self {
                 engine,
                 journal,
-                cache: node_cache,
+                tm,
                 tree,
                 snap_time: 0,
             })

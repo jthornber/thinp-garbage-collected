@@ -16,13 +16,13 @@ use crate::packed_array::*;
 //-------------------------------------------------------------------------
 
 // FIXME: is NodeCache the new transaction manager?  Should we rename?
-pub struct NodeCacheInner {
+pub struct TransactionManagerInner {
     journal: Arc<Mutex<Journal>>,
     alloc: JournalAlloc<BuddyAllocator>,
     cache: Arc<BlockCache>,
 }
 
-impl NodeCacheInner {
+impl TransactionManagerInner {
     pub fn new(
         journal: Arc<Mutex<Journal>>,
         cache: Arc<BlockCache>,
@@ -181,17 +181,19 @@ impl NodeCacheInner {
 
 type BatchId = u64;
 
-pub struct NodeCache {
-    inner: Arc<Mutex<NodeCacheInner>>,
+pub struct TransactionManager {
+    inner: Arc<Mutex<TransactionManagerInner>>,
 }
 
-impl NodeCache {
+impl TransactionManager {
     pub fn new(
         journal: Arc<Mutex<Journal>>,
         cache: Arc<BlockCache>,
         alloc: BuddyAllocator,
     ) -> Self {
-        let inner = Arc::new(Mutex::new(NodeCacheInner::new(journal, cache, alloc)));
+        let inner = Arc::new(Mutex::new(TransactionManagerInner::new(
+            journal, cache, alloc,
+        )));
         Self { inner }
     }
 
@@ -238,12 +240,12 @@ impl NodeCache {
 //-------------------------------------------------------------------------
 
 pub struct CacheCompletion {
-    cache: Arc<NodeCache>,
+    cache: Arc<TransactionManager>,
     id: BatchId,
 }
 
 impl CacheCompletion {
-    pub fn new(cache: Arc<NodeCache>) -> Self {
+    pub fn new(cache: Arc<TransactionManager>) -> Self {
         let id = cache.get_batch_id();
         Self { cache, id }
     }
@@ -289,7 +291,7 @@ pub fn ensure_space<
     Node: NodeW<V, ExclusiveProxy>,
     M: Fn(&mut JournalNode<Node, V, ExclusiveProxy>, usize) -> NodeInsertOutcome,
 >(
-    cache: &NodeCache,
+    cache: &TransactionManager,
     left: &mut JournalNode<Node, V, ExclusiveProxy>,
     idx: usize,
     mutator: M,

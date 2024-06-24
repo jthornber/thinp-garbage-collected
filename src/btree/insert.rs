@@ -3,8 +3,8 @@ use std::slice;
 
 use crate::block_cache::*;
 use crate::btree::node::*;
-use crate::btree::node_cache::*;
 use crate::btree::nodes::journal::*;
+use crate::btree::transaction_manager::*;
 use crate::packed_array::*;
 
 use crate::btree::BTree;
@@ -20,7 +20,7 @@ impl<
     > BTree<V, INodeR, INodeW, LNodeR, LNodeW>
 {
     fn insert_into_internal(&mut self, n_ptr: NodePtr, key: Key, value: &V) -> Result<NodeResult> {
-        let mut node = self.cache.shadow::<NodePtr, INodeW>(n_ptr, 0)?;
+        let mut node = self.tm.shadow::<NodePtr, INodeW>(n_ptr, 0)?;
 
         let mut idx = node.lower_bound(key);
         if idx < 0 {
@@ -38,37 +38,31 @@ impl<
     }
 
     fn insert_into_leaf(&mut self, n_ptr: NodePtr, key: Key, value: &V) -> Result<NodeResult> {
-        let mut node = self.cache.shadow::<V, LNodeW>(n_ptr, 0)?;
+        let mut node = self.tm.shadow::<V, LNodeW>(n_ptr, 0)?;
         let idx = node.lower_bound(key);
 
         if idx < 0 {
-            ensure_space(
-                self.cache.as_ref(),
-                &mut node,
-                idx as usize,
-                |node, _idx| node.prepend(slice::from_ref(&key), slice::from_ref(value)),
-            )
+            ensure_space(self.tm.as_ref(), &mut node, idx as usize, |node, _idx| {
+                node.prepend(slice::from_ref(&key), slice::from_ref(value))
+            })
         } else if idx as usize >= node.nr_entries() {
-            ensure_space(
-                self.cache.as_ref(),
-                &mut node,
-                idx as usize,
-                |node, _idx| node.append(slice::from_ref(&key), slice::from_ref(value)),
-            )
+            ensure_space(self.tm.as_ref(), &mut node, idx as usize, |node, _idx| {
+                node.append(slice::from_ref(&key), slice::from_ref(value))
+            })
         } else if node.get_key(idx as usize) == key {
             // overwrite
-            ensure_space(self.cache.as_ref(), &mut node, idx as usize, |node, idx| {
+            ensure_space(self.tm.as_ref(), &mut node, idx as usize, |node, idx| {
                 node.overwrite(idx, key, value)
             })
         } else {
-            ensure_space(self.cache.as_ref(), &mut node, idx as usize, |node, idx| {
+            ensure_space(self.tm.as_ref(), &mut node, idx as usize, |node, idx| {
                 node.insert(idx + 1, key, value)
             })
         }
     }
 
     fn insert_recursive(&mut self, n_ptr: NodePtr, key: Key, value: &V) -> Result<NodeResult> {
-        if self.cache.is_internal(n_ptr)? {
+        if self.tm.is_internal(n_ptr)? {
             self.insert_into_internal(n_ptr, key, value)
         } else {
             self.insert_into_leaf(n_ptr, key, value)
@@ -83,7 +77,7 @@ impl<
             Single(NodeInfo { n_ptr, .. }) => Ok(n_ptr),
             Pair(left, right) => {
                 let mut parent: JournalNode<INodeW, NodePtr, ExclusiveProxy> =
-                    self.cache.new_node(false)?;
+                    self.tm.new_node(false)?;
                 parent.append(
                     &[left.key_min.unwrap(), right.key_min.unwrap()],
                     &[left.n_ptr, right.n_ptr],

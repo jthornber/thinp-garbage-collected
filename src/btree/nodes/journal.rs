@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 
 use crate::block_cache::MetadataBlock;
 use crate::btree::node::*;
-use crate::btree::node_cache::*;
+use crate::btree::transaction_manager::*;
 use crate::byte_types::*;
 use crate::journal::batch;
 use crate::journal::entry::*;

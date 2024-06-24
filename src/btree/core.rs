@@ -3,8 +3,8 @@ use std::sync::Arc;
 
 use crate::block_cache::*;
 use crate::btree::node::*;
-use crate::btree::node_cache::*;
 use crate::btree::nodes::journal::*;
+use crate::btree::transaction_manager::*;
 use crate::packed_array::*;
 
 use crate::btree::BTree;
@@ -19,9 +19,9 @@ impl<
         LNodeW: NodeW<V, ExclusiveProxy>,
     > BTree<V, INodeR, INodeW, LNodeR, LNodeW>
 {
-    pub fn open_tree(cache: Arc<NodeCache>, root: NodePtr) -> Self {
+    pub fn open_tree(tm: Arc<TransactionManager>, root: NodePtr) -> Self {
         Self {
-            cache,
+            tm,
             root,
             snap_time: 0,
             phantom_v: std::marker::PhantomData,
@@ -32,12 +32,12 @@ impl<
         }
     }
 
-    pub fn empty_tree(cache: Arc<NodeCache>) -> Result<Self> {
-        let node = cache.new_node::<V, LNodeW>(true)?;
+    pub fn empty_tree(tm: Arc<TransactionManager>) -> Result<Self> {
+        let node = tm.new_node::<V, LNodeW>(true)?;
         let root = node.n_ptr();
 
         Ok(Self {
-            cache,
+            tm,
             root,
             snap_time: 0,
             phantom_v: std::marker::PhantomData,
@@ -52,7 +52,7 @@ impl<
         self.snap_time = snap_time;
 
         Self {
-            cache: self.cache.clone(),
+            tm: self.tm.clone(),
             root: self.root,
             snap_time,
             phantom_v: std::marker::PhantomData,
@@ -95,7 +95,7 @@ impl<
             }
             Pair(left, right) => {
                 node.overwrite(idx, left.key_min.unwrap(), &left.n_ptr);
-                ensure_space(self.cache.as_ref(), node, idx, |node, idx| {
+                ensure_space(self.tm.as_ref(), node, idx, |node, idx| {
                     node.insert(idx + 1, right.key_min.unwrap(), &right.n_ptr)
                 })
             }

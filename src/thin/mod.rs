@@ -12,8 +12,8 @@ use thinp::io_engine::*;
 use crate::allocators::*;
 use crate::block_cache::*;
 use crate::btree::node::*;
-use crate::btree::node_cache::*;
 use crate::btree::nodes::simple::*;
+use crate::btree::transaction_manager::*;
 use crate::btree::BTree;
 use crate::btree::*;
 use crate::copier::fake::*;
@@ -134,23 +134,23 @@ impl Ops {
 
 struct Journaller {
     journal: Arc<Mutex<Journal>>,
-    cache: Arc<NodeCache>,
+    tm: Arc<TransactionManager>,
 }
 
 impl Journaller {
-    fn new(journal: Arc<Mutex<Journal>>, cache: Arc<NodeCache>) -> Self {
-        Journaller { journal, cache }
+    fn new(journal: Arc<Mutex<Journal>>, tm: Arc<TransactionManager>) -> Self {
+        Journaller { journal, tm }
     }
 
     fn batch<T, F: FnOnce() -> Result<T>>(&self, action: F) -> Result<T> {
-        let batch_id = self.cache.get_batch_id();
+        let batch_id = self.tm.get_batch_id();
         batch::begin_batch();
         let r = action();
 
         // We need to write the batch to the journal regardless since the node will
         // have been updated.
         let completion: Option<Box<dyn BatchCompletion>> =
-            Some(Box::new(CacheCompletion::new(self.cache.clone())));
+            Some(Box::new(CacheCompletion::new(self.tm.clone())));
         let b = Batch {
             ops: batch::end_batch()?,
             completion,
@@ -167,7 +167,7 @@ impl Journaller {
 pub struct Pool {
     copier: Arc<dyn Copier>,
     journal: Arc<Mutex<Journal>>,
-    cache: Arc<NodeCache>,
+    tm: Arc<TransactionManager>,
     data_alloc: BuddyAllocator,
 
     infos: InfoTree,
@@ -208,15 +208,19 @@ impl Pool {
         let data_alloc = BuddyAllocator::new(nr_data_blocks);
 
         let journal = Self::create_journal(dir)?;
-        let node_cache = Arc::new(NodeCache::new(journal.clone(), block_cache, meta_alloc));
-        let journaller = Journaller::new(journal.clone(), node_cache.clone());
+        let tm = Arc::new(TransactionManager::new(
+            journal.clone(),
+            block_cache,
+            meta_alloc,
+        ));
+        let journaller = Journaller::new(journal.clone(), tm.clone());
 
-        let infos = journaller.batch(|| BTree::empty_tree(node_cache.clone()))?;
+        let infos = journaller.batch(|| BTree::empty_tree(tm.clone()))?;
 
         Ok(Pool {
             copier,
             journal,
-            cache: node_cache,
+            tm,
             data_alloc,
             infos,
             active_devs: BTreeMap::new(),
@@ -267,12 +271,12 @@ impl Pool {
     }
 
     fn journalled<T, F: FnOnce() -> Result<T>>(&self, action: F) -> Result<T> {
-        let journaller = Journaller::new(self.journal.clone(), self.cache.clone());
+        let journaller = Journaller::new(self.journal.clone(), self.tm.clone());
         journaller.batch(action)
     }
 
     fn journaller(&self) -> Journaller {
-        Journaller::new(self.journal.clone(), self.cache.clone())
+        Journaller::new(self.journal.clone(), self.tm.clone())
     }
 
     pub fn create_thin_(&mut self, size: VBlock) -> Result<(ThinID, MappingTree)> {
@@ -280,7 +284,7 @@ impl Pool {
         let id = self.new_thin_id();
 
         // create new btree
-        let mappings = MappingTree::empty_tree(self.cache.clone())?;
+        let mappings = MappingTree::empty_tree(self.tm.clone())?;
 
         Ok((id, mappings))
     }
@@ -381,7 +385,7 @@ impl Pool {
             .infos
             .lookup(dev)?
             .ok_or_else(|| anyhow!("ThinID not found"))?;
-        let mappings = MappingTree::open_tree(self.cache.clone(), info.root);
+        let mappings = MappingTree::open_tree(self.tm.clone(), info.root);
 
         Ok((info, mappings))
     }

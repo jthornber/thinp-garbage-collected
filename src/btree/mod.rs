@@ -3,7 +3,7 @@ use std::io::{self, Read, Write};
 use std::sync::Arc;
 
 use crate::block_cache::MetadataBlock;
-use crate::btree::node_cache::*;
+use crate::btree::transaction_manager::*;
 use crate::packed_array::*;
 
 //-------------------------------------------------------------------------
@@ -37,7 +37,7 @@ impl Serializable for NodePtr {
 //-------------------------------------------------------------------------
 
 pub struct BTree<V: Serializable + Copy, INodeR, INodeW, LNodeR, LNodeW> {
-    cache: Arc<NodeCache>,
+    tm: Arc<TransactionManager>,
     root: NodePtr,
     snap_time: u32,
 
@@ -53,11 +53,11 @@ mod core;
 mod insert;
 mod lookup;
 pub mod node;
-pub mod node_cache;
 mod node_registry;
 pub mod nodes;
 pub mod range_value;
 mod remove;
 mod tests;
+pub mod transaction_manager;
 
 //-------------------------------------------------------------------------

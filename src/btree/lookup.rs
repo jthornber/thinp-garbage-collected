@@ -2,8 +2,8 @@ use anyhow::Result;
 
 use crate::block_cache::*;
 use crate::btree::node::*;
-use crate::btree::node_cache::*;
 use crate::btree::range_value::RangeValue;
+use crate::btree::transaction_manager::*;
 use crate::btree::BTree;
 use crate::packed_array::*;
 
@@ -21,8 +21,8 @@ impl<
         let mut n_ptr = self.root;
 
         loop {
-            if self.cache.is_internal(n_ptr)? {
-                let node: INodeR = self.cache.read(n_ptr)?;
+            if self.tm.is_internal(n_ptr)? {
+                let node: INodeR = self.tm.read(n_ptr)?;
 
                 let idx = node.lower_bound(key);
                 if idx < 0 || idx >= node.nr_entries() as isize {
@@ -31,7 +31,7 @@ impl<
 
                 n_ptr = node.get_value(idx as usize);
             } else {
-                let node: LNodeR = self.cache.read(n_ptr)?;
+                let node: LNodeR = self.tm.read(n_ptr)?;
 
                 let idx = node.lower_bound(key);
                 if idx < 0 || idx >= node.nr_entries() as isize {
@@ -167,8 +167,8 @@ impl<
     fn select_above(&self, n_ptr: NodePtr, key: Key, results: &mut Vec<(Key, V)>) -> Result<()> {
         use NodeOp::*;
 
-        if self.cache.is_internal(n_ptr)? {
-            let node: INodeR = self.cache.read(n_ptr)?;
+        if self.tm.is_internal(n_ptr)? {
+            let node: INodeR = self.tm.read(n_ptr)?;
 
             for op in get_prog_above(&node, key) {
                 match op {
@@ -184,7 +184,7 @@ impl<
                 }
             }
         } else {
-            let node: LNodeR = self.cache.read(n_ptr)?;
+            let node: LNodeR = self.tm.read(n_ptr)?;
             for op in get_prog_above::<V, LNodeR>(&node, key) {
                 match op {
                     AboveAndBelow(_) => {
@@ -213,8 +213,8 @@ impl<
     fn select_below(&self, n_ptr: NodePtr, key: Key, results: &mut Vec<(Key, V)>) -> Result<()> {
         use NodeOp::*;
 
-        if self.cache.is_internal(n_ptr)? {
-            let node: INodeR = self.cache.read(n_ptr)?;
+        if self.tm.is_internal(n_ptr)? {
+            let node: INodeR = self.tm.read(n_ptr)?;
 
             for op in get_prog_below(&node, key) {
                 match op {
@@ -230,7 +230,7 @@ impl<
                 }
             }
         } else {
-            let node: LNodeR = self.cache.read(n_ptr)?;
+            let node: LNodeR = self.tm.read(n_ptr)?;
             for op in get_prog_below::<V, LNodeR>(&node, key) {
                 match op {
                     AboveAndBelow(_) => {
@@ -257,13 +257,13 @@ impl<
     }
 
     fn select_all(&self, n_ptr: NodePtr, results: &mut Vec<(Key, V)>) -> Result<()> {
-        if self.cache.is_internal(n_ptr)? {
-            let node: INodeR = self.cache.read(n_ptr)?;
+        if self.tm.is_internal(n_ptr)? {
+            let node: INodeR = self.tm.read(n_ptr)?;
             for i in 0..node.nr_entries() {
                 self.select_all(node.get_value(i), results)?;
             }
         } else {
-            let node: LNodeR = self.cache.read(n_ptr)?;
+            let node: LNodeR = self.tm.read(n_ptr)?;
             for i in 0..node.nr_entries() {
                 results.push((node.get_key(i), node.get_value(i)));
             }
@@ -280,8 +280,8 @@ impl<
     ) -> Result<()> {
         use NodeOp::*;
 
-        if self.cache.is_internal(n_ptr)? {
-            let node: INodeR = self.cache.read(n_ptr)?;
+        if self.tm.is_internal(n_ptr)? {
+            let node: INodeR = self.tm.read(n_ptr)?;
             for op in get_prog(&node, key_begin, key_end) {
                 match op {
                     AboveAndBelow(idx) => {
@@ -299,7 +299,7 @@ impl<
                 }
             }
         } else {
-            let node: LNodeR = self.cache.read(n_ptr)?;
+            let node: LNodeR = self.tm.read(n_ptr)?;
             for op in get_prog::<V, LNodeR>(&node, key_begin, key_end) {
                 match op {
                     AboveAndBelow(idx) => {

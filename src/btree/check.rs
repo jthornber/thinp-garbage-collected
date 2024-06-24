@@ -55,8 +55,8 @@ impl<
         ensure!(!seen.contains(&n_ptr.loc));
         seen.insert(n_ptr.loc);
 
-        if self.cache.is_internal(n_ptr)? {
-            let node: INodeR = self.cache.read(n_ptr)?;
+        if self.tm.is_internal(n_ptr)? {
+            let node: INodeR = self.tm.read(n_ptr)?;
 
             Self::check_keys_(&node, key_min, key_max)?;
 
@@ -72,7 +72,7 @@ impl<
                 total += self.check_(loc, kmin, kmax, seen)?;
             }
         } else {
-            let node: LNodeR = self.cache.read(n_ptr)?;
+            let node: LNodeR = self.tm.read(n_ptr)?;
             Self::check_keys_(&node, key_min, key_max)?;
             total += node.nr_entries() as u64;
         }

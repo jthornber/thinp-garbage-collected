@@ -3,9 +3,9 @@ use anyhow::Result;
 
 use crate::block_cache::*;
 use crate::btree::node::*;
-use crate::btree::node_cache::*;
 use crate::btree::nodes::journal::*;
 use crate::btree::range_value::RangeValue;
+use crate::btree::transaction_manager::*;
 use crate::btree::BTree;
 use crate::packed_array::*;
 
@@ -20,9 +20,7 @@ impl<
     > BTree<V, INodeR, INodeW, LNodeR, LNodeW>
 {
     fn remove_internal(&mut self, n_ptr: NodePtr, key: Key) -> Result<NodeResult> {
-        let mut node = self
-            .cache
-            .shadow::<NodePtr, INodeW>(n_ptr, self.snap_time)?;
+        let mut node = self.tm.shadow::<NodePtr, INodeW>(n_ptr, self.snap_time)?;
 
         let mut idx = node.lower_bound(key);
         if idx < 0 {
@@ -41,7 +39,7 @@ impl<
     }
 
     fn remove_leaf(&mut self, n_ptr: NodePtr, key: Key) -> Result<NodeResult> {
-        let mut node = self.cache.shadow::<V, LNodeW>(n_ptr, 0)?;
+        let mut node = self.tm.shadow::<V, LNodeW>(n_ptr, 0)?;
 
         let idx = node.lower_bound(key);
         if (idx >= 0) && ((idx as usize) < node.nr_entries()) {
@@ -54,7 +52,7 @@ impl<
     }
 
     fn remove_recurse(&mut self, n_ptr: NodePtr, key: Key) -> Result<NodeResult> {
-        if self.cache.is_internal(n_ptr)? {
+        if self.tm.is_internal(n_ptr)? {
             self.remove_internal(n_ptr, key)
         } else {
             self.remove_leaf(n_ptr, key)
@@ -68,7 +66,7 @@ impl<
             Single(NodeInfo { n_ptr, .. }) => Ok(n_ptr),
             Pair(left, right) => {
                 let mut parent: JournalNode<INodeW, NodePtr, ExclusiveProxy> =
-                    self.cache.new_node(false)?;
+                    self.tm.new_node(false)?;
                 parent.append(
                     &[left.key_min.unwrap(), right.key_min.unwrap()],
                     &[left.n_ptr, right.n_ptr],
@@ -129,9 +127,7 @@ impl<
     fn remove_lt_internal(&mut self, n_ptr: NodePtr, key: Key) -> Result<NodeResult> {
         use NodeOp::*;
 
-        let mut node = self
-            .cache
-            .shadow::<NodePtr, INodeW>(n_ptr, self.snap_time)?;
+        let mut node = self.tm.shadow::<NodePtr, INodeW>(n_ptr, self.snap_time)?;
         let prog = lt_prog(&node, key);
 
         let mut delta = 0;
@@ -163,7 +159,7 @@ impl<
     fn remove_lt_leaf(&mut self, n_ptr: NodePtr, key: Key) -> Result<NodeResult> {
         use NodeOp::*;
 
-        let mut node = self.cache.shadow::<V, LNodeW>(n_ptr, self.snap_time)?;
+        let mut node = self.tm.shadow::<V, LNodeW>(n_ptr, self.snap_time)?;
         let prog = lt_prog(&node, key);
 
         let mut delta = 0;
@@ -194,7 +190,7 @@ impl<
     }
 
     pub fn remove_lt_recurse(&mut self, n_ptr: NodePtr, key: Key) -> Result<NodeResult> {
-        if self.cache.is_internal(n_ptr)? {
+        if self.tm.is_internal(n_ptr)? {
             self.remove_lt_internal(n_ptr, key)
         } else {
             self.remove_lt_leaf(n_ptr, key)
@@ -253,9 +249,7 @@ impl<
     fn remove_geq_internal(&mut self, n_ptr: NodePtr, key: Key) -> Result<NodeResult> {
         use NodeOp::*;
 
-        let mut node = self
-            .cache
-            .shadow::<NodePtr, INodeW>(n_ptr, self.snap_time)?;
+        let mut node = self.tm.shadow::<NodePtr, INodeW>(n_ptr, self.snap_time)?;
         let prog = geq_prog(&node, key);
 
         let mut delta = 0;
@@ -287,7 +281,7 @@ impl<
     fn remove_geq_leaf(&mut self, n_ptr: NodePtr, key: Key) -> Result<NodeResult> {
         use NodeOp::*;
 
-        let mut node = self.cache.shadow::<V, LNodeW>(n_ptr, self.snap_time)?;
+        let mut node = self.tm.shadow::<V, LNodeW>(n_ptr, self.snap_time)?;
         let prog = geq_prog(&node, key);
 
         let mut delta = 0;
@@ -318,7 +312,7 @@ impl<
     }
 
     fn remove_geq_recurse(&mut self, n_ptr: NodePtr, key: Key) -> Result<NodeResult> {
-        if self.cache.is_internal(n_ptr)? {
+        if self.tm.is_internal(n_ptr)? {
             self.remove_geq_internal(n_ptr, key)
         } else {
             self.remove_geq_leaf(n_ptr, key)
@@ -438,9 +432,7 @@ impl<
     ) -> Result<NodeResult> {
         use NodeOp::*;
 
-        let mut node = self
-            .cache
-            .shadow::<NodePtr, INodeW>(n_ptr, self.snap_time)?;
+        let mut node = self.tm.shadow::<NodePtr, INodeW>(n_ptr, self.snap_time)?;
         let prog = range_split(&node, key_begin, key_end);
         let prog_len = prog.len();
 
@@ -482,7 +474,7 @@ impl<
     ) -> Result<NodeResult> {
         use NodeOp::*;
 
-        let mut node = self.cache.shadow::<V, LNodeW>(n_ptr, self.snap_time)?;
+        let mut node = self.tm.shadow::<V, LNodeW>(n_ptr, self.snap_time)?;
         let prog = range_split(&node, key_begin, key_end);
         let prog_len = prog.len();
 
@@ -511,12 +503,9 @@ impl<
                         }
                         (Some((k1, v1)), Some((k2, v2))) => {
                             node.overwrite(idx, k1, &v1);
-                            return ensure_space(
-                                self.cache.as_ref(),
-                                &mut node,
-                                idx,
-                                |node, idx| node.insert(idx + 1, k2, &v2),
-                            );
+                            return ensure_space(self.tm.as_ref(), &mut node, idx, |node, idx| {
+                                node.insert(idx + 1, k2, &v2)
+                            });
                         }
                     }
                 }
@@ -558,7 +547,7 @@ impl<
         key_begin: Key,
         key_end: Key,
     ) -> Result<NodeResult> {
-        if self.cache.is_internal(n_ptr)? {
+        if self.tm.is_internal(n_ptr)? {
             self.remove_range_internal(n_ptr, key_begin, key_end)
         } else {
             self.remove_range_leaf(n_ptr, key_begin, key_end)
@@ -577,7 +566,7 @@ impl<
             Single(NodeInfo { n_ptr, .. }) => Ok(n_ptr),
             Pair(left, right) => {
                 let mut parent: JournalNode<INodeW, NodePtr, ExclusiveProxy> =
-                    self.cache.new_node(false)?;
+                    self.tm.new_node(false)?;
                 parent.append(
                     &[left.key_min.unwrap(), right.key_min.unwrap()],
                     &[left.n_ptr, right.n_ptr],

@@ -1,4 +1,5 @@
 use anyhow::Result;
+use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
 
 use crate::allocators::journal::*;
@@ -7,20 +8,28 @@ use crate::block_cache::*;
 use crate::btree::node::*;
 use crate::btree::nodes::journal::*;
 use crate::byte_types::*;
+use crate::journal::entry::*;
 use crate::journal::BatchCompletion;
+use crate::journal::*;
 use crate::packed_array::*;
 
 //-------------------------------------------------------------------------
 
-// FIXME: make thread safe
+// FIXME: is NodeCache the new transaction manager?  Should we rename?
 pub struct NodeCacheInner {
+    journal: Arc<Mutex<Journal>>,
     alloc: JournalAlloc<BuddyAllocator>,
     cache: Arc<BlockCache>,
 }
 
 impl NodeCacheInner {
-    pub fn new(cache: Arc<BlockCache>, alloc: BuddyAllocator) -> Self {
+    pub fn new(
+        journal: Arc<Mutex<Journal>>,
+        cache: Arc<BlockCache>,
+        alloc: BuddyAllocator,
+    ) -> Self {
         Self {
+            journal,
             alloc: JournalAlloc::new(alloc, AllocKind::Metadata),
             cache,
         }
@@ -88,6 +97,84 @@ impl NodeCacheInner {
             self.wrap_node(n_ptr.loc, old)
         }
     }
+
+    fn replay_node(&mut self, loc: MetadataBlock) -> Result<Box<dyn ReplayableNode>> {
+        todo!();
+    }
+
+    pub fn replay_entry(&mut self, entry: &Entry) -> Result<()> {
+        use Entry::*;
+
+        match entry {
+            AllocMetadata(b, e) => {
+                todo!()
+            }
+            FreeMetadata(b, e) => {
+                todo!()
+            }
+            GrowMetadata(delta) => {
+                todo!()
+            }
+
+            AllocData(b, e) => {
+                todo!()
+            }
+            FreeData(b, e) => {
+                todo!()
+            }
+            GrowData(delta) => {
+                todo!()
+            }
+
+            UpdateInfoRoot(root) => {
+                todo!()
+            }
+
+            SetSeq(loc, seq_nr) => {
+                todo!()
+            }
+            Zero(loc, b, e) => {
+                todo!()
+            }
+
+            Entry::Literal(loc, offset, data) => {
+                todo!();
+            }
+            Entry::Overwrite(loc, idx, key, value) => {
+                let mut n = self.replay_node(*loc)?;
+                n.apply_overwrite(*idx, *key, &value)?;
+            }
+
+            Shadow(loc, dest) => {
+                todo!()
+            }
+            Overwrite(loc, idx, k, v) => {
+                todo!()
+            }
+            Insert(loc, idx, k, v) => {
+                todo!()
+            }
+            Prepend(loc, ks, vs) => {
+                todo!()
+            }
+            Append(loc, ks, vs) => {
+                todo!()
+            }
+            Erase(loc, idx_b, idx_e) => {
+                todo!()
+            }
+        }
+
+        Ok(())
+    }
+
+    pub fn replay_entries(&mut self, entries: &[Entry]) -> Result<()> {
+        for e in entries {
+            self.replay_entry(e)?;
+        }
+
+        Ok(())
+    }
 }
 
 //-------------------------------------------------------------------------
@@ -99,8 +186,12 @@ pub struct NodeCache {
 }
 
 impl NodeCache {
-    pub fn new(cache: Arc<BlockCache>, alloc: BuddyAllocator) -> Self {
-        let inner = Arc::new(Mutex::new(NodeCacheInner::new(cache, alloc)));
+    pub fn new(
+        journal: Arc<Mutex<Journal>>,
+        cache: Arc<BlockCache>,
+        alloc: BuddyAllocator,
+    ) -> Self {
+        let inner = Arc::new(Mutex::new(NodeCacheInner::new(journal, cache, alloc)));
         Self { inner }
     }
 

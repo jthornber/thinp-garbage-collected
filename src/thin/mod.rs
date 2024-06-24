@@ -207,10 +207,10 @@ impl Pool {
         let meta_alloc = BuddyAllocator::new(nr_metadata_blocks);
         let data_alloc = BuddyAllocator::new(nr_data_blocks);
 
-        let node_cache = Arc::new(NodeCache::new(block_cache, meta_alloc));
         let journal = Self::create_journal(dir)?;
-
+        let node_cache = Arc::new(NodeCache::new(journal.clone(), block_cache, meta_alloc));
         let journaller = Journaller::new(journal.clone(), node_cache.clone());
+
         let infos = journaller.batch(|| BTree::empty_tree(node_cache.clone()))?;
 
         Ok(Pool {

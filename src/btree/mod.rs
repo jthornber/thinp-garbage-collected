@@ -54,6 +54,7 @@ mod insert;
 mod lookup;
 pub mod node;
 pub mod node_cache;
+mod node_registry;
 pub mod nodes;
 pub mod range_value;
 mod remove;

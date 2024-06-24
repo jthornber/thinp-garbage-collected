@@ -39,11 +39,11 @@ pub const NODE_HEADER_SIZE: usize = 16;
 pub struct NodeHeader {
     pub seq_nr: u32,
 
-    // Shadow op will trigger COW if the current time is higher than this
+    // Shadow op will trigger COW if this is higher than the mapping snap time.
     pub snap_time: u32,
 
     pub flags: BTreeFlags,
-    pub kind: u16, // eg, SimpleNode, BlockTimeNode
+    pub kind: u16, // eg, SimpleNode<NodePtr>, MappingNode
     pub nr_entries: u32,
 }
 
@@ -177,6 +177,21 @@ pub trait NodeW<V: Serializable, Data: Writeable>: NodeR<V, Data> {
     fn remove_at(&mut self, idx: usize) {
         self.erase(idx, idx + 1);
     }
+}
+
+/// An object-safe variant used for journal playback.
+pub trait ReplayableNode {
+    fn get_kind(&self) -> u16;
+    fn get_loc(&self) -> u32;
+    fn get_seq_nr(&self) -> u32;
+
+    // These methods don't return an InsertOutcome, because we know there's space (otherwise they
+    // wouldn't be in the journal).
+    fn apply_overwrite(&mut self, idx: u32, key: Key, value: &[u8]) -> Result<()>;
+    fn apply_insert(&mut self, idx: u32, key: Key, value: &[u8]) -> Result<()>;
+    fn apply_prepend(&mut self, keys: &[Key], values: &[&[u8]]) -> Result<()>;
+    fn apply_append(&mut self, keys: &[Key], values: &[&[u8]]) -> Result<()>;
+    fn apply_erase(&mut self, idx_b: u32, idx_e: u32) -> Result<()>;
 }
 
 //-------------------------------------------------------------------------

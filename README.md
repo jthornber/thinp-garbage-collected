@@ -31,3 +31,7 @@ the GC process forward as part of block allocation.
 - Integrate with blk_archive to make it easy to migrate volumes out of the live pool.
 
 - Support online defragmentation of both metadata and data.
+
+- Shrink data volumes.
+
+- Multiple data volumes?

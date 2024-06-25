@@ -718,35 +718,38 @@ mod tests {
     }
 
     #[test]
-    fn test_packing_efficiency_vs_density() -> io::Result<()> {
-        let total_blocks = 1_000_000; // 1 million blocks
+    fn test_packing_efficiency_fragmented() -> io::Result<()> {
+        let total_blocks = 256_000;
         let densities = [
             0.01, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.99,
         ];
 
         println!("");
-        println!("Density | Packed Size (bytes) | Bytes per Free Block");
-        println!("--------|---------------------|---------------------");
+        println!(" Allocated | Packed |");
+        println!("-----------|--------|");
 
         for &density in &densities {
             let allocator = create_allocator_with_density(total_blocks, density);
             let packed = allocator.pack()?;
-            let free_blocks = (total_blocks as f64 * density) as u64;
-            let bytes_per_free_block = packed.len() as f64 / free_blocks as f64;
 
             println!(
-                "{:7.2} | {:19} | {:21.2}",
-                density,
-                packed.len(),
-                bytes_per_free_block
+                "  {:8} | {:8}",
+                to_unit((total_blocks - allocator.nr_free()) * 4096),
+                to_unit(packed.len() as u64),
             );
         }
 
         Ok(())
     }
 
+    /*
     fn alloc_range(alloc_size: u64) -> (u64, u64) {
         (alloc_size / 2, alloc_size * 3 / 2)
+    }
+    */
+
+    fn alloc_range(alloc_size: u64) -> (u64, u64) {
+        (alloc_size, alloc_size + 1)
     }
 
     fn create_allocator_with_large_allocations(
@@ -772,15 +775,27 @@ mod tests {
         allocator
     }
 
+    fn to_unit(size: u64) -> String {
+        if size > 1024 * 1024 * 1024 {
+            format!("{:.2}g", size as f64 / (1024.0 * 1024.0 * 1024.0))
+        } else if size > 1024 * 1024 {
+            format!("{:.2}m", size as f64 / (1024.0 * 1024.0))
+        } else if size > 1024 {
+            format!("{:.2}k", size as f64 / 1024.0)
+        } else {
+            format!("{}b", size)
+        }
+    }
+
     #[test]
     fn test_packing_efficiency_large_allocations() -> io::Result<()> {
-        let total_blocks = 1_000_000; // 1 million blocks
+        let total_blocks = 256_000_000; // 1 Tb of data split into 4k blocks
         let avg_alloc_sizes = [1024, 4096, 16384, 65536];
         let free_ratios = [0.1, 0.3, 0.5, 0.7, 0.9];
 
         println!("");
-        println!("    Alloc Size | Allocated  | Packed Size (bytes) | Bits per Free Block");
-        println!("---------------|------------|---------------------|---------------------");
+        println!("    Alloc Size    | Allocated  | Packed |");
+        println!("------------------|------------|--------|");
 
         for &avg_alloc_size in &avg_alloc_sizes {
             for &free_ratio in &free_ratios {
@@ -792,16 +807,14 @@ mod tests {
                 let allocated = allocator.total_blocks - allocator.nr_free();
                 let packed = allocator.pack()?;
                 let free_blocks = allocator.nr_free();
-                let bits_per_free_block = (packed.len() * 8) as f64 / free_blocks as f64;
                 let range = alloc_range(avg_alloc_size);
 
                 println!(
-                    "{:6}..{:6} | {:10} | {:19} | {:12.2}",
-                    range.0,
-                    range.1,
-                    allocated,
-                    packed.len(),
-                    bits_per_free_block
+                    "{:7} - {:7} | {:10} | {:6} |",
+                    to_unit(range.0 * 4096),
+                    to_unit(range.1 * 4096),
+                    to_unit(allocated * 4096),
+                    to_unit(packed.len() as u64),
                 );
             }
             println!(); // Add a blank line between different avg_alloc_sizes

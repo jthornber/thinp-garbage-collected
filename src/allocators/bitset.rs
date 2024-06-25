@@ -2,6 +2,7 @@ use byteorder::{LittleEndian, ReadBytesExt, WriteBytesExt};
 use std::io;
 use std::mem::size_of;
 
+use crate::hash::*;
 use crate::varint::*;
 
 //----------------------------------------------------------------
@@ -13,7 +14,7 @@ fn div_up(n: u64, divisor: u64) -> u64 {
 //----------------------------------------------------------------
 
 pub struct Bitset {
-    nr_bits: u64,
+    pub nr_bits: u64,
     bits: Vec<u64>,
 }
 
@@ -37,26 +38,74 @@ impl Bitset {
         Bitset { nr_bits, bits }
     }
 
-    pub fn clear_range(&mut self, b: u64, e: u64) {
-        assert!(b < e && e <= self.nr_bits);
-        let start_word = b / 64;
-        let end_word = (e - 1) / 64;
+    /// Zero the last n bits of a word at idx
+    fn zero_high_n_bits(&mut self, idx: usize, n: u8) {
+        assert!(n <= 64, "n must be <= 64");
+        if n == 0 {
+            return;
+        }
 
-        if start_word == end_word {
-            let mask = ((1u64 << (e - b)) - 1) << (b % 64);
-            self.bits[start_word as usize] &= !mask;
-        } else {
-            let start_mask = !0u64 << (b % 64);
-            self.bits[start_word as usize] &= !start_mask;
+        let mask = ((1u64 << (64 - n)) - 1);
+        self.bits[idx] &= mask;
+    }
 
-            for word in (start_word + 1)..end_word {
-                self.bits[word as usize] = 0;
-            }
-
-            let end_mask = (1u64 << (e % 64)) - 1;
-            self.bits[end_word as usize] &= !end_mask;
+    /// Zero a run of words [begin, end)
+    fn zero_word_range(&mut self, begin: usize, end: usize) {
+        if begin < end {
+            // Using `fill` is equivalent to `memset` in safe Rust
+            self.bits[begin..end].fill(0);
         }
     }
+
+    /// Zero the first n bits of a word at idx
+    fn zero_low_n_bits(&mut self, idx: usize, n: u8) {
+        assert!(n <= 64, "n must be <= 64");
+        if n == 0 {
+            return;
+        }
+        let mask = !0u64 << n;
+        self.bits[idx] &= mask;
+    }
+
+    pub fn clear_range(&mut self, b: u64, e: u64) {
+        assert!(b < e && e <= self.nr_bits, "Invalid range");
+
+        let start_word = (b / 64) as usize;
+        let end_word = (e / 64) as usize;
+        let start_bit = (b % 64) as u8;
+        let end_bit = (e % 64) as u8;
+
+        if start_word == end_word {
+            // Case 1: Range is within a single word
+            let n = end_bit - start_bit;
+            let mask = ((1u64 << n) - 1) << start_bit;
+            self.bits[start_word] &= !mask;
+        } else {
+            // Case 2: Range spans multiple words
+            // Handle first word
+            self.zero_high_n_bits(start_word, 64 - start_bit);
+
+            // Handle middle words
+            self.zero_word_range(start_word + 1, end_word);
+
+            // Handle last word
+            if end_bit > 0 {
+                self.zero_low_n_bits(end_word, end_bit);
+            }
+        }
+    }
+
+    /*
+    pub fn clear_range(&mut self, b: u64, e: u64) {
+        assert!(b < e && e <= self.nr_bits, "Invalid range");
+
+        for bit in b..e {
+            let word_index = (bit / 64) as usize;
+            let bit_index = bit % 64;
+            self.bits[word_index] &= !(1u64 << bit_index);
+        }
+    }
+    */
 
     fn word_type(word: u64) -> WordType {
         use WordType::*;
@@ -228,13 +277,13 @@ impl<'a> ZeroRunIterator<'a> {
         None
     }
 
-    fn measure_zero_run(&mut self, start: u64) -> u64 {
-        let mut end = start;
+    fn measure_zero_run(&mut self, begin: u64) -> u64 {
+        let mut end = begin;
         while end < self.bitset.nr_bits && !self.bitset.is_set(end) {
             end += 1;
         }
         self.current_position = end;
-        end - start
+        end
     }
 }
 
@@ -242,9 +291,9 @@ impl<'a> Iterator for ZeroRunIterator<'a> {
     type Item = (u64, u64);
 
     fn next(&mut self) -> Option<Self::Item> {
-        if let Some(start) = self.find_next_zero() {
-            let length = self.measure_zero_run(start);
-            Some((start, length))
+        if let Some(begin) = self.find_next_zero() {
+            let end = self.measure_zero_run(begin);
+            Some((begin, end))
         } else {
             None
         }
@@ -354,14 +403,35 @@ mod tests {
         let mut bitset = Bitset::ones(128);
 
         // Clear some ranges to create zero runs
-        bitset.clear_range(10, 20); // Zero run: (10, 10)
-        bitset.clear_range(50, 60); // Zero run: (50, 10)
-        bitset.clear_range(64, 96); // Zero run: (64, 32) - crosses word boundary
-        bitset.clear_range(127, 128); // Zero run: (127, 1) - at the end
+        bitset.clear_range(10, 20);
+        bitset.clear_range(50, 60);
+        bitset.clear_range(64, 96);
+        bitset.clear_range(127, 128);
 
         let zero_runs: Vec<(u64, u64)> = bitset.zero_runs().collect();
 
-        assert_eq!(zero_runs, vec![(10, 10), (50, 10), (64, 32), (127, 1)]);
+        assert_eq!(zero_runs, vec![(10, 20), (50, 60), (64, 96), (127, 128)]);
+    }
+
+    #[test]
+    fn test_zero_low_n_bits() {
+        let mut bitset = Bitset::ones(64);
+        bitset.zero_low_n_bits(0, 4);
+        assert_eq!(bitset.bits[0], 0xFFFFFFFFFFFFFFF0);
+    }
+
+    #[test]
+    fn test_zero_word_range() {
+        let mut bitset = Bitset::ones(256);
+        bitset.zero_word_range(1, 3);
+        assert_eq!(bitset.bits, vec![u64::MAX, 0, 0, u64::MAX]);
+    }
+
+    #[test]
+    fn test_zero_high_n_bits() {
+        let mut bitset = Bitset::ones(64);
+        bitset.zero_high_n_bits(0, 4);
+        assert_eq!(bitset.bits[0], 0x0FFFFFFFFFFFFFFF);
     }
 }
 

@@ -19,7 +19,8 @@ the GC process forward as part of block allocation.
 
 - Live recovery rather than offline thin_repair.
 
-- Support 4k block size.  Just to confound making metadata take up less space.
+- Support 4k block size.  Just to confound making metadata take up less space.  This will
+  greatly reduce write amplification.
 
 - Isolate thin transactions from each other.  In thinp1 there is only a global
   transaction.  As you get more active thins you are going to naturally get more
@@ -28,3 +29,5 @@ the GC process forward as part of block allocation.
 - Support short lived snapshots that don't have a permanent performance hit on the origin.
 
 - Integrate with blk_archive to make it easy to migrate volumes out of the live pool.
+
+- Support online defragmentation of both metadata and data.

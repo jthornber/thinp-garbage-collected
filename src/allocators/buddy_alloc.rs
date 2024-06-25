@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::io::{self, Read, Write};
 
 use crate::allocators::bits::*;
+use crate::allocators::bitset::*;
 use crate::allocators::*;
 use crate::varint::*;
 
@@ -27,72 +28,32 @@ const DENSITY_THRESHOLD: f64 = 0.1;
 
 impl BuddyAllocator {
     pub fn pack(&self) -> io::Result<Vec<u8>> {
-        let mut packed = Vec::new();
-        packed.write_u64::<LittleEndian>(self.total_blocks)?;
+        // Create a bitset representing allocated blocks
+        let mut allocated = Bitset::ones(self.total_blocks);
 
+        // Mark free blocks as 0 in the bitset
         for (order, blocks) in self.free_blocks.iter().enumerate() {
-            if !blocks.is_empty() {
-                packed.write_u8(order as u8)?;
-                let blocks_at_this_order = self.total_blocks >> order;
-                let density = blocks.len() as f64 / blocks_at_this_order as f64;
-
-                if density > DENSITY_THRESHOLD {
-                    // Use bitmap
-                    packed.write_u8(1)?; // 1 indicates bitmap
-                    write_varint(&mut packed, blocks_at_this_order)?;
-                    let mut bitmap = vec![0u8; (blocks_at_this_order as usize + 7) / 8];
-                    for &block in blocks {
-                        let index = (block >> order) as usize;
-                        bitmap[index / 8] |= 1 << (index % 8);
-                    }
-                    packed.extend_from_slice(&bitmap);
-                } else {
-                    // Use delta encoding
-                    packed.write_u8(0)?; // 0 indicates delta encoding
-                    write_varint(&mut packed, blocks.len() as u64)?;
-                    let mut prev_block = 0;
-                    for &block in blocks {
-                        let delta = block - prev_block;
-                        write_varint(&mut packed, delta)?;
-                        prev_block = block;
-                    }
-                }
+            let size = 1 << order;
+            for &block in blocks {
+                allocated.clear_range(block, block + size);
             }
         }
+
+        // Pack the bitset
+        let packed = allocated.pack()?;
+
         Ok(packed)
     }
 
-    pub fn unpack(mut data: &[u8]) -> io::Result<Self> {
-        let total_blocks = data.read_u64::<LittleEndian>()?;
-        let mut alloc = BuddyAllocator::new_empty(total_blocks);
+    pub fn unpack(mut data: &[u8]) -> anyhow::Result<Self> {
+        let bits = Bitset::unpack(data)?;
+        let mut alloc = BuddyAllocator::new_empty(bits.nr_bits);
 
-        while !data.is_empty() {
-            let order = data.read_u8()? as usize;
-            let encoding_type = data.read_u8()?;
-
-            if encoding_type == 1 {
-                // bitmap
-                let blocks_at_this_order = read_varint(&mut data)?;
-                let bitmap_size = ((blocks_at_this_order + 7) / 8) as usize;
-                let bitmap = &data[..bitmap_size];
-                data = &data[bitmap_size..];
-
-                for i in 0..blocks_at_this_order {
-                    if bitmap[i as usize / 8] & (1 << (i % 8)) != 0 {
-                        alloc.free_blocks[order].insert(i << order);
-                    }
-                }
-            } else {
-                // delta encoding
-                let count = read_varint(&mut data)?;
-                let mut block = 0;
-                for _ in 0..count {
-                    let delta = read_varint(&mut data)?;
-                    block += delta;
-                    alloc.free_blocks[order].insert(block);
-                }
-            }
+        // Reconstruct free blocks from the bitset
+        for (begin, end) in bits.zero_runs() {
+            alloc.free(begin, end - begin)?;
         }
+
         Ok(alloc)
     }
 
@@ -580,6 +541,13 @@ fn test_get_containing_block() {
     assert_eq!(buddy.get_containing_block(1023, 10), 0);
 }
 
+fn dump_free_blocks(msg: &str, buddy: &BuddyAllocator) {
+    println!("{}", msg);
+    for (i, set) in buddy.free_blocks.iter().enumerate() {
+        println!("Order {}: {:?}", i, set);
+    }
+}
+
 #[test]
 fn test_free_small_blocks() -> Result<()> {
     let mut buddy = BuddyAllocator::new(1024);
@@ -587,18 +555,12 @@ fn test_free_small_blocks() -> Result<()> {
     // Allocate all the space
     buddy.alloc(1024)?;
 
-    println!("State before freeing:");
-    for (i, set) in buddy.free_blocks.iter().enumerate() {
-        println!("Order {}: {:?}", i, set);
-    }
+    dump_free_blocks("State before freeing:", &buddy);
 
     // Free the first 8 blocks
     buddy.free(0, 8)?;
 
-    println!("State after freeing 8 blocks:");
-    for (i, set) in buddy.free_blocks.iter().enumerate() {
-        println!("Order {}: {:?}", i, set);
-    }
+    dump_free_blocks("State after freeing 8 blocks:", &buddy);
 
     // Check that the blocks are free at the correct order
     assert!(
@@ -657,11 +619,13 @@ fn test_buddy_allocator_pack_unpack() -> anyhow::Result<()> {
     let block3 = allocator.alloc(5)?;
 
     // Pack the allocator
+    dump_free_blocks("packed", &allocator);
     let packed = allocator.pack()?;
     eprintln!("packed size = {}", packed.len());
 
     // Unpack to create a new allocator
     let mut unpacked_allocator = BuddyAllocator::unpack(&packed)?;
+    dump_free_blocks("unpacked", &unpacked_allocator);
 
     // Verify that the unpacked allocator has the same state
     assert_eq!(allocator.total_blocks, unpacked_allocator.total_blocks);

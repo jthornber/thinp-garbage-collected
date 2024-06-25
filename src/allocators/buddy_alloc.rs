@@ -195,6 +195,15 @@ impl BuddyAllocator {
         self.free_blocks[order].insert(block);
         Ok(())
     }
+
+    // FIXME: slow, may only be used in tests
+    pub fn nr_free(&self) -> u64 {
+        self.free_blocks
+            .iter()
+            .enumerate()
+            .map(|(order, blocks)| blocks.len() as u64 * (1 << order))
+            .sum()
+    }
 }
 
 impl Allocator for BuddyAllocator {
@@ -715,6 +724,7 @@ mod tests {
             0.01, 0.05, 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 0.99,
         ];
 
+        println!("");
         println!("Density | Packed Size (bytes) | Bytes per Free Block");
         println!("--------|---------------------|---------------------");
 
@@ -730,6 +740,71 @@ mod tests {
                 packed.len(),
                 bytes_per_free_block
             );
+        }
+
+        Ok(())
+    }
+
+    fn alloc_range(alloc_size: u64) -> (u64, u64) {
+        (alloc_size / 2, alloc_size * 3 / 2)
+    }
+
+    fn create_allocator_with_large_allocations(
+        total_blocks: u64,
+        avg_alloc_size: u64,
+        free_ratio: f64,
+    ) -> BuddyAllocator {
+        let mut allocator = BuddyAllocator::new(total_blocks);
+        let mut rng = rand::thread_rng();
+        let mut allocated = 0;
+        let target = ((1.0 - free_ratio) * (total_blocks as f64)) as u64;
+        let range = alloc_range(avg_alloc_size);
+
+        while allocated < target {
+            let size = rng.gen_range(range.0..range.1);
+            if let Ok(block) = allocator.alloc(size) {
+                allocated += size;
+            } else {
+                break;
+            }
+        }
+
+        allocator
+    }
+
+    #[test]
+    fn test_packing_efficiency_large_allocations() -> io::Result<()> {
+        let total_blocks = 1_000_000; // 1 million blocks
+        let avg_alloc_sizes = [1024, 4096, 16384, 65536];
+        let free_ratios = [0.1, 0.3, 0.5, 0.7, 0.9];
+
+        println!("");
+        println!("    Alloc Size | Allocated  | Packed Size (bytes) | Bits per Free Block");
+        println!("---------------|------------|---------------------|---------------------");
+
+        for &avg_alloc_size in &avg_alloc_sizes {
+            for &free_ratio in &free_ratios {
+                let allocator = create_allocator_with_large_allocations(
+                    total_blocks,
+                    avg_alloc_size,
+                    free_ratio,
+                );
+                let allocated = allocator.total_blocks - allocator.nr_free();
+                let packed = allocator.pack()?;
+                let free_blocks = allocator.nr_free();
+                let bits_per_free_block = (packed.len() * 8) as f64 / free_blocks as f64;
+                let range = alloc_range(avg_alloc_size);
+
+                println!(
+                    "{:6}..{:6} | {:10} | {:19} | {:12.2}",
+                    range.0,
+                    range.1,
+                    allocated,
+                    packed.len(),
+                    bits_per_free_block
+                );
+            }
+            println!(); // Add a blank line between different avg_alloc_sizes
         }
 
         Ok(())

@@ -1,4 +1,5 @@
 mod bits;
+mod bitset;
 mod buddy_alloc;
 pub mod data_alloc;
 pub mod journal;

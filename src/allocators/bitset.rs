@@ -196,7 +196,62 @@ impl Bitset {
         let bit_index = bit % 64;
         (self.bits[word_index] & (1u64 << bit_index)) != 0
     }
+
+    pub fn zero_runs(&self) -> impl Iterator<Item = (u64, u64)> + '_ {
+        ZeroRunIterator::new(self)
+    }
 }
+
+//----------------------------------------------------------------
+
+struct ZeroRunIterator<'a> {
+    bitset: &'a Bitset,
+    current_position: u64,
+}
+
+impl<'a> ZeroRunIterator<'a> {
+    fn new(bitset: &'a Bitset) -> Self {
+        ZeroRunIterator {
+            bitset,
+            current_position: 0,
+        }
+    }
+
+    // FIXME: we can speed up by comparing with 0 and u64::MAX
+    fn find_next_zero(&mut self) -> Option<u64> {
+        while self.current_position < self.bitset.nr_bits {
+            if !self.bitset.is_set(self.current_position) {
+                return Some(self.current_position);
+            }
+            self.current_position += 1;
+        }
+        None
+    }
+
+    fn measure_zero_run(&mut self, start: u64) -> u64 {
+        let mut end = start;
+        while end < self.bitset.nr_bits && !self.bitset.is_set(end) {
+            end += 1;
+        }
+        self.current_position = end;
+        end - start
+    }
+}
+
+impl<'a> Iterator for ZeroRunIterator<'a> {
+    type Item = (u64, u64);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if let Some(start) = self.find_next_zero() {
+            let length = self.measure_zero_run(start);
+            Some((start, length))
+        } else {
+            None
+        }
+    }
+}
+
+//----------------------------------------------------------------
 
 #[cfg(test)]
 mod tests {
@@ -292,6 +347,21 @@ mod tests {
         }
 
         Ok(())
+    }
+
+    #[test]
+    fn test_zero_runs() {
+        let mut bitset = Bitset::ones(128);
+
+        // Clear some ranges to create zero runs
+        bitset.clear_range(10, 20); // Zero run: (10, 10)
+        bitset.clear_range(50, 60); // Zero run: (50, 10)
+        bitset.clear_range(64, 96); // Zero run: (64, 32) - crosses word boundary
+        bitset.clear_range(127, 128); // Zero run: (127, 1) - at the end
+
+        let zero_runs: Vec<(u64, u64)> = bitset.zero_runs().collect();
+
+        assert_eq!(zero_runs, vec![(10, 10), (50, 10), (64, 32), (127, 1)]);
     }
 }
 

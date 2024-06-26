@@ -132,27 +132,33 @@ impl TransactionManagerInner {
 
         match entry {
             AllocMetadata(b, e) => {
-                // FIXME: we need to add alloc_at to the Allocator trait
-                todo!()
+                let mut alloc = self.metadata_alloc.lock().unwrap();
+                alloc.alloc_specific(*b as u64, (e - b) as u64);
             }
             FreeMetadata(b, e) => {
-                todo!()
+                let mut alloc = self.metadata_alloc.lock().unwrap();
+                alloc.free(*b as u64, (e - b) as u64);
             }
             GrowMetadata(delta) => {
                 todo!()
             }
 
             AllocData(b, e) => {
-                todo!()
+                let mut alloc = self.data_alloc.lock().unwrap();
+                alloc.alloc_specific(*b as u64, (e - b) as u64);
             }
             FreeData(b, e) => {
-                todo!()
+                let mut alloc = self.data_alloc.lock().unwrap();
+                alloc.free(*b as u64, (e - b) as u64);
             }
             GrowData(delta) => {
                 todo!()
             }
 
             UpdateInfoRoot(root) => {
+                // FIXME: suggests we need to move the info tree to within the tm, which is
+                // obviously not good.  Should the tm hold all tree roots?  We'd still need
+                // the pool to update the info tree.
                 todo!()
             }
 
@@ -160,11 +166,13 @@ impl TransactionManagerInner {
                 todo!()
             }
             Zero(loc, b, e) => {
-                todo!()
+                let mut data = self.cache.exclusive_lock(*loc)?;
+                &data.rw()[*b..*e].fill(0);
             }
 
-            Literal(loc, offset, data) => {
-                todo!();
+            Literal(loc, offset, lit) => {
+                let mut data = self.cache.exclusive_lock(*loc)?;
+                &data.rw()[*offset..(*offset + lit.len())].copy_from_slice(lit);
             }
 
             Shadow(loc, dest) => {

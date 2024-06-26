@@ -2,8 +2,6 @@ use anyhow::Result;
 use tracing::Level;
 use tracing_subscriber::FmtSubscriber;
 
-use thinp_userland::lua_bindings::*;
-
 //-------------------------------------------------------------------------
 
 fn main() -> Result<()> {
@@ -13,7 +11,7 @@ fn main() -> Result<()> {
         .finish();
     tracing::subscriber::set_global_default(subscriber).expect("setting default subscriber failed");
 
-    lua_main()?;
+    println!("Hello, world");
 
     Ok(())
 }

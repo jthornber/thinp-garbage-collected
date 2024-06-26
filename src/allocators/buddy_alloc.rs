@@ -264,6 +264,20 @@ impl Allocator for BuddyAllocator {
         Ok(index)
     }
 
+    fn alloc_specific(&mut self, block: u64, nr_blocks: u64) -> Result<()> {
+        let mut b = block;
+        let e = block + nr_blocks;
+
+        while b < e {
+            let order = calc_min_order(b, e - b);
+            self.alloc_at(b, order)?;
+            b += 1 << order;
+            assert!(b <= e);
+        }
+
+        Ok(())
+    }
+
     // Free a previously allocated block.
     fn free(&mut self, block: u64, nr_blocks: u64) -> Result<()> {
         if nr_blocks == 0 {
@@ -823,6 +837,74 @@ mod tests {
             }
             println!(); // Add a blank line between different avg_alloc_sizes
         }
+
+        Ok(())
+    }
+
+    #[test]
+    fn test_alloc_specific() -> Result<()> {
+        let mut buddy = BuddyAllocator::new(1024);
+
+        // Test 1: Allocate a specific range
+        buddy.alloc_specific(100, 50)?;
+
+        // Verify that the blocks are allocated
+        assert!(
+            buddy.alloc_at(100, 5).is_err(),
+            "Block 100 should be allocated"
+        );
+        assert!(
+            buddy.alloc_at(140, 3).is_err(),
+            "Block 140 should be allocated"
+        );
+
+        // Test 2: Allocate another range
+        buddy.alloc_specific(200, 30)?;
+
+        // Verify that the blocks are allocated
+        assert!(
+            buddy.alloc_at(200, 4).is_err(),
+            "Block 200 should be allocated"
+        );
+        assert!(
+            buddy.alloc_at(225, 2).is_err(),
+            "Block 225 should be allocated"
+        );
+
+        // Test 3: Try to allocate an overlapping range (should fail)
+        assert!(
+            buddy.alloc_specific(225, 10).is_err(),
+            "Overlapping allocation should fail"
+        );
+
+        // Test 4: Allocate at the beginning
+        buddy.alloc_specific(0, 64)?;
+
+        // Verify that the blocks are allocated
+        assert!(buddy.alloc_at(0, 6).is_err(), "Block 0 should be allocated");
+        assert!(
+            buddy.alloc_at(60, 2).is_err(),
+            "Block 60 should be allocated"
+        );
+
+        // Test 5: Allocate at the end
+        buddy.alloc_specific(960, 64)?;
+
+        // Verify that the blocks are allocated
+        assert!(
+            buddy.alloc_at(960, 6).is_err(),
+            "Block 960 should be allocated"
+        );
+        assert!(
+            buddy.alloc_at(1020, 2).is_err(),
+            "Block 1020 should be allocated"
+        );
+
+        // Test 6: Try to allocate beyond the total size (should fail)
+        assert!(
+            buddy.alloc_specific(1000, 50).is_err(),
+            "Allocation beyond total size should fail"
+        );
 
         Ok(())
     }

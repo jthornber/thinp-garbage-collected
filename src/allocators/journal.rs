@@ -72,6 +72,11 @@ impl<A: Allocator> Allocator for JournalAlloc<A> {
         Ok(b)
     }
 
+    fn alloc_specific(&mut self, block: u64, nr_blocks: u64) -> Result<()> {
+        // We don't journal this since it's only used by journal replay.
+        self.inner.alloc_specific(block, nr_blocks)
+    }
+
     fn free(&mut self, block: u64, nr_blocks: u64) -> Result<()> {
         self.inner.free(block, nr_blocks)?;
 

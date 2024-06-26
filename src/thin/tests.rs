@@ -66,13 +66,14 @@ mod tests {
 
     #[test]
     fn test_provision() -> Result<()> {
-        let mut fix = Fixture::new(1000, 10000)?;
+        let mut fix = Fixture::new(1000, 256_000_000)?;
         let dev = fix.pool.create_thin(1000)?;
 
-        let mappings = fix.pool.get_read_mapping(dev, 0, 1000)?;
+        let mut thin = fix.pool.open_thin(dev);
+        let mappings = fix.pool.get_read_mapping(&mut thin, 0, 1000)?;
         ensure!(mappings.is_empty());
 
-        let mappings = fix.pool.get_write_mapping(dev, 0, 1000)?;
+        let mappings = fix.pool.get_write_mapping(&mut thin, 0, 1000)?;
         ensure!(!mappings.is_empty());
         eprintln!("mappings = {:?}", mappings);
 
@@ -82,7 +83,7 @@ mod tests {
         }
         ensure!(total == 1000);
 
-        let mappings = fix.pool.get_read_mapping(dev, 0, 500)?;
+        let mappings = fix.pool.get_read_mapping(&mut thin, 0, 500)?;
         ensure!(!mappings.is_empty());
 
         Ok(())

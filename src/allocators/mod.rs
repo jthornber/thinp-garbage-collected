@@ -32,6 +32,7 @@ pub type Result<T> = result::Result<T, MemErr>;
 pub type AllocRun = (u64, u64);
 
 pub trait Allocator {
+    fn nr_blocks(&self) -> u64;
     fn alloc_many(&mut self, nr_blocks: u64, min_order: usize) -> Result<(u64, Vec<AllocRun>)>;
     fn alloc(&mut self, nr_blocks: u64) -> Result<u64>;
     fn free(&mut self, block: u64, nr_blocks: u64) -> Result<()>;

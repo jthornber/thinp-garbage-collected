@@ -10,8 +10,8 @@ use crate::block_cache::MetadataBlock;
 /// A sub allocator that wraps the global metadata allocator.
 /// Each active thin volume will have one of these to improve
 /// metadata locality.
-struct MetadataAlloc {
-    global_alloc: Arc<Mutex<BuddyAllocator>>,
+pub struct MetadataAlloc {
+    global_alloc: Arc<Mutex<dyn Allocator>>,
     prealloc_count: u64,
     free_list: VecDeque<MetadataBlock>,
 }
@@ -29,7 +29,7 @@ impl Drop for MetadataAlloc {
 }
 
 impl MetadataAlloc {
-    pub fn new(global_alloc: Arc<Mutex<BuddyAllocator>>, prealloc_size: u64) -> Self {
+    pub fn new(global_alloc: Arc<Mutex<dyn Allocator>>, prealloc_size: u64) -> Self {
         Self {
             global_alloc,
             prealloc_count: prealloc_size,

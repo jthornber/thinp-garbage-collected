@@ -5,8 +5,8 @@ use crate::allocators::*;
 
 //-------------------------------------
 
-struct DataAlloc {
-    global_alloc: Arc<Mutex<BuddyAllocator>>,
+pub struct DataAlloc {
+    global_alloc: Arc<Mutex<dyn Allocator>>,
     local_alloc: BuddyAllocator,
     prealloc_size: u64,
 }
@@ -26,15 +26,12 @@ impl Drop for DataAlloc {
 }
 
 impl DataAlloc {
-    pub fn new(global_alloc: Arc<Mutex<BuddyAllocator>>, prealloc_size: u64) -> Self {
+    pub fn new(global_alloc: Arc<Mutex<dyn Allocator>>, prealloc_size: u64) -> Self {
         let mut global_alloc_locked = global_alloc.lock().unwrap();
-        let nr_blocks = global_alloc_locked.total_blocks;
-        let (_total, runs) = global_alloc_locked
-            .alloc_many(prealloc_size, 0)
-            .expect("Failed to preallocate space for DataAlloc");
+        let nr_blocks = global_alloc_locked.nr_blocks();
         drop(global_alloc_locked);
 
-        let local_alloc = BuddyAllocator::from_runs(nr_blocks, runs);
+        let local_alloc = BuddyAllocator::new_empty(nr_blocks);
         Self {
             global_alloc,
             local_alloc,
@@ -72,6 +69,10 @@ impl DataAlloc {
             }
             Err(e) => Err(e),
         }
+    }
+
+    pub fn free(&mut self, block: u64, nr_blocks: u64) -> Result<()> {
+        self.local_alloc.free(block, nr_blocks)
     }
 }
 

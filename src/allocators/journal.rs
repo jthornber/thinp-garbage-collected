@@ -40,6 +40,10 @@ impl<A: Allocator> JournalAlloc<A> {
 use AllocKind::*;
 
 impl<A: Allocator> Allocator for JournalAlloc<A> {
+    fn nr_blocks(&self) -> u64 {
+        self.inner.nr_blocks()
+    }
+
     fn alloc_many(&mut self, nr_blocks: u64, min_order: usize) -> Result<(u64, Vec<AllocRun>)> {
         let (total, runs) = self.inner.alloc_many(nr_blocks, min_order)?;
 

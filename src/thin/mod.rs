@@ -9,6 +9,8 @@ use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use thinp::io_engine::*;
 
+use crate::allocators::data_alloc::*;
+use crate::allocators::metadata_alloc::*;
 use crate::allocators::*;
 use crate::block_cache::*;
 use crate::btree::node::*;
@@ -161,6 +163,14 @@ impl Journaller {
     }
 }
 
+//----------------------------------------------------------------
+
+pub struct ThinDev {
+    id: ThinID,
+    metadata_alloc: MetadataAlloc,
+    data_alloc: DataAlloc,
+}
+
 //-------------------------------------------------------------------------
 
 #[allow(dead_code)]
@@ -174,6 +184,8 @@ pub struct Pool {
 
     snap_time: u32,
     next_thin_id: ThinID,
+
+    data_prealloc_size: u64,
 }
 
 pub struct Map {
@@ -225,6 +237,7 @@ impl Pool {
             active_devs: BTreeMap::new(),
             snap_time: 0,
             next_thin_id: 0,
+            data_prealloc_size: 64_000,
         })
     }
 
@@ -310,7 +323,8 @@ impl Pool {
             let mut ops = Ops::default();
 
             // Provision the entire range
-            let _ = self.provision(0, size, &mut ops)?;
+            let mut dev = self.open_thin(id);
+            let _ = self.provision(&mut dev, 0, size, &mut ops)?;
 
             // Add thin_info to btree
             let info = ThinInfo {
@@ -378,11 +392,23 @@ impl Pool {
 
     //---------------------
 
+    pub fn open_thin(&self, id: ThinID) -> ThinDev {
+        let metadata_alloc = MetadataAlloc::new(self.tm.get_metadata_alloc(), 32);
+        let data_alloc = DataAlloc::new(self.tm.get_data_alloc(), self.data_prealloc_size);
+        ThinDev {
+            id,
+            metadata_alloc,
+            data_alloc,
+        }
+    }
+
+    //---------------------
+
     // FIXME: we should cache the infos so we don't have to keep reading them
-    fn get_mapping_tree(&self, dev: ThinID) -> Result<(ThinInfo, MappingTree)> {
+    fn get_mapping_tree(&self, id: ThinID) -> Result<(ThinInfo, MappingTree)> {
         let info = self
             .infos
-            .lookup(dev)?
+            .lookup(id)?
             .ok_or_else(|| anyhow!("ThinID not found"))?;
         let mappings = MappingTree::open_tree(self.tm.clone(), info.root);
 
@@ -401,11 +427,11 @@ impl Pool {
 
     pub fn get_read_mapping(
         &self,
-        id: ThinID,
+        dev: &mut ThinDev,
         thin_begin: VBlock,
         thin_end: VBlock,
     ) -> Result<Vec<(VBlock, Mapping)>> {
-        let (_, mappings) = self.get_mapping_tree(id)?;
+        let (_, mappings) = self.get_mapping_tree(dev.id)?;
         mappings.lookup_range(thin_begin, thin_end)
     }
 
@@ -424,17 +450,18 @@ impl Pool {
 
     fn provision(
         &mut self,
+        dev: &mut ThinDev,
         begin: VBlock,
         end: VBlock,
         ops: &mut Ops,
     ) -> Result<Vec<(VBlock, Mapping)>> {
         let len = end - begin;
 
-        let (total, runs) = self.tm.alloc_data(len)?;
+        let (total, runs) = dev.data_alloc.alloc(len)?;
         if total != len {
             // Not enough space, free the allocated data and return an error
             for (b, e) in runs {
-                self.tm.free_data(b, e - b)?;
+                dev.data_alloc.free(b, e - b)?;
             }
             return Err(anyhow!("Could not allocate enough data space"));
         }
@@ -464,6 +491,7 @@ impl Pool {
 
     fn break_sharing(
         &mut self,
+        dev: &mut ThinDev,
         begin: VBlock,
         end: VBlock,
         ops: &mut Ops,
@@ -471,11 +499,11 @@ impl Pool {
         ops.push_remove(begin, end);
 
         let len = end - begin;
-        let (total, runs) = self.tm.alloc_data(len)?;
+        let (total, runs) = dev.data_alloc.alloc(len)?;
         if total != len {
             // Not enough space, free the allocated data and return an error
             for (b, e) in runs {
-                self.tm.free_data(b, e - b)?;
+                dev.data_alloc.free(b, e - b)?;
             }
             return Err(anyhow!("Could not allocate enough data space"));
         }
@@ -532,11 +560,11 @@ impl Pool {
 
     pub fn get_write_mapping(
         &mut self,
-        id: ThinID,
+        dev: &mut ThinDev,
         thin_begin: VBlock,
         thin_end: VBlock,
     ) -> Result<Vec<(VBlock, Mapping)>> {
-        let (mut info, mut mappings) = self.get_mapping_tree(id)?;
+        let (mut info, mut mappings) = self.get_mapping_tree(dev.id)?;
         let mappings_in_range = mappings.lookup_range(thin_begin, thin_end)?;
 
         self.journaller().batch(|| {
@@ -547,13 +575,13 @@ impl Pool {
             // Closure to process mappings and gaps
             let mut process_mapping = |vbegin: VBlock, m: Option<&Mapping>| -> Result<()> {
                 if current < vbegin {
-                    result.extend(self.provision(current, vbegin, &mut ops)?);
+                    result.extend(self.provision(dev, current, vbegin, &mut ops)?);
                 }
 
                 if let Some(m) = m {
                     if Self::should_break_sharing(&info, m) {
                         let len = m.e - m.b;
-                        result.extend(self.break_sharing(vbegin, vbegin + len, &mut ops)?);
+                        result.extend(self.break_sharing(dev, vbegin, vbegin + len, &mut ops)?);
                     } else {
                         result.push((vbegin, *m));
                     }
@@ -573,7 +601,7 @@ impl Pool {
 
             // Finalize operations
             self.exec_ops(&mut mappings, &ops)?;
-            self.update_mappings_root(id, &mut info, &mappings)?;
+            self.update_mappings_root(dev.id, &mut info, &mappings)?;
 
             Ok(result)
         })
@@ -581,17 +609,22 @@ impl Pool {
 
     //---------------------
 
-    pub fn discard(&mut self, id: ThinID, thin_begin: VBlock, thin_end: VBlock) -> Result<()> {
+    pub fn discard(
+        &mut self,
+        dev: &mut ThinDev,
+        thin_begin: VBlock,
+        thin_end: VBlock,
+    ) -> Result<()> {
         self.journaller().batch(|| {
-            let (mut info, mut mappings) = self.get_mapping_tree(id)?;
+            let (mut info, mut mappings) = self.get_mapping_tree(dev.id)?;
             mappings.remove_range(thin_begin, thin_end)?;
-            self.update_mappings_root(id, &mut info, &mappings)
+            self.update_mappings_root(dev.id, &mut info, &mappings)
         })
     }
 
     //---------------------
 
-    fn flush(&mut self, id: ThinID) -> Result<()> {
+    fn flush(&mut self, dev: ThinDev) -> Result<()> {
         // find the latest cache pinning id and wait for it to hit the disk
         todo!();
     }

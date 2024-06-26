@@ -207,6 +207,10 @@ impl BuddyAllocator {
 }
 
 impl Allocator for BuddyAllocator {
+    fn nr_blocks(&self) -> u64 {
+        self.total_blocks
+    }
+
     /// Succeeds if _any_ blocks were pre-allocated.
     fn alloc_many(&mut self, nr_blocks: u64, min_order: usize) -> Result<(u64, Vec<AllocRun>)> {
         let mut total_allocated = 0;

@@ -229,14 +229,14 @@ impl TransactionManager {
         Self { inner }
     }
 
-    pub fn alloc_data(&self, len: u64) -> allocators::Result<(u64, Vec<(u64, u64)>)> {
+    pub fn get_metadata_alloc(&self) -> Arc<Mutex<dyn Allocator>> {
         let mut inner = self.inner.lock().unwrap();
-        inner.alloc_data(len)
+        inner.metadata_alloc.clone()
     }
 
-    pub fn free_data(&self, b: u64, len: u64) -> allocators::Result<()> {
+    pub fn get_data_alloc(&self) -> Arc<Mutex<dyn Allocator>> {
         let mut inner = self.inner.lock().unwrap();
-        inner.free_data(b, len)
+        inner.data_alloc.clone()
     }
 
     pub fn is_internal(&self, n_ptr: NodePtr) -> Result<bool> {

@@ -118,19 +118,19 @@ We do have to store the free blocks in the checkpoint.  But this is stored at mu
 bz_1763895
 mean run length: 2.2
 thinp1: 14092m
-thinp2:   552m
-ratio: 25:1 
+thinp2:   518m
+ratio: 27:1 
 
 bz_2039978
 mean run length: 1.68
 thinp1: 4102m  !!!???
-thinp2:   40.75m
+thinp2:   38.5m
 ratio: 100:1
 
 bz_1806798c32
 mean run length: 5.1
 thinp1: 151m
-thinp2:   2.7m
+thinp2:   2.5m
 ratio: 56:1
  
 Rule of thumb: 2 (no space maps) * 6 (thin2 mappings / thin1 mappings) * (average run length)
@@ -139,7 +139,7 @@ Rule of thumb: 2 (no space maps) * 6 (thin2 mappings / thin1 mappings) * (averag
 # Improving average run length
 
 - Per thin allocators
-- Allow snapshots to be reversed
+- Ephemeral snapshots (Allow snapshots to be reversed)
 - metadata only snapshots that don't trigger copy-on-write
 - Integrate blk-archive for the very common 'time-machine' use case
 - Alternative method for tracking deltas.
